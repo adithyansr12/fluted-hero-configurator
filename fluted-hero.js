@@ -1,5 +1,5 @@
 /*!
- * Fluted Hero v1.2.0 —interactive fluted-glass background (WebGL, no dependencies)
+ * Fluted Hero v1.3.0 —interactive fluted-glass background (WebGL, no dependencies)
  *
  * Pattern: vertical glass ribs refracting a blue light field (matches the Figma/video design).
  * Interaction: Perlin-noise idle sway + cursor-velocity spring push on every rib,
@@ -52,6 +52,7 @@
     patternCenterX: 0.5,     // rings / rays: center of the pattern (0 = left, 1 = right)
     patternCenterY: 0.5,     // (0 = top, 1 = bottom)
     ribRhythm: [1],          // repeating rib widths as multiples of ribWidth, up to 8, e.g. [1, 1, 3]
+    image: '',               // picture shown behind the glass in full color: a URL (same origin or CORS-enabled) or data URI
     lightMap: '',            // optional light behind the glass: "WxH:base64" brightness bytes ('' = built-in diagonal light)
 
     // ---- Framing: how the 16:9 design maps onto the hero ----
@@ -134,6 +135,7 @@
     'uniform float uType;uniform vec2 uDir;uniform vec2 uCenter;uniform float uBend;uniform float uWaves;uniform float uRayN;',
     'uniform float uRhy[8];uniform float uRhyN;uniform float uRhyT;',
     'uniform sampler2D uLight;uniform float uLightOn;',
+    'uniform sampler2D uImg;uniform float uImgOn;uniform vec2 uImgScale;',
 
     'vec2 disp(vec2 p){',
     '  vec2 uv=((p-uGridOrigin)/uGridGap+0.5)/uGridSize;',
@@ -241,8 +243,16 @@
     '  s+=n*(f-0.5)*w*(uMag-1.0)*fd;',
     '  s+=vec2(-n.y,n.x)*uRefr*uFrame.w*pow(1.0-f,uCurve)*fd;',
     '  if(uType>4.5)s+=n*uRefr*uFrame.w*0.6*pow(1.0-g,uCurve);',
-    '  float I=lightField(s);',
-    '  vec3 c=ramp(I);',
+    '  float I;vec3 c;',
+    '  if(uImgOn>0.5){',
+    // the picture itself, in full color, seen through the glass
+    '    vec2 iu=(s-uFrame.xy)/uFrame.zw;',
+    '    iu+=vec2(0.003*sin(iu.y*5.0+uTime*0.21),0.003*sin(iu.x*4.0-uTime*0.17));',
+    '    c=texture2D(uImg,(iu-0.5)*uImgScale+0.5).rgb;',
+    '    I=dot(c,vec3(0.2126,0.7152,0.0722));',
+    '    vec2 im=(s-uMouse.xy)/(0.26*min(uSize.x,uSize.y));',
+    '    c+=uMouse.z*exp(-dot(im,im));',
+    '  }else{I=lightField(s);c=ramp(I);}',
     '  float sh=uShadow*fd*(1.0-0.6*smoothstep(0.7,1.1,I));',
     '  c*=1.0+0.5*sh-sh*smoothstep(0.05,1.0,f);',
     '  c*=1.0-uHl*fd*exp(-pow(f*w/gm/1.4,2.0));',
@@ -346,6 +356,7 @@
 
     var gl = null, isGL2 = false, prog = null, buf = null, tex = null, U = {};
     var lightTex = null, lightKey = null, lightOn = false;
+    var imgTex = null, imgKey = null, imgReady = null;
     var metrics = { ribPx: 0, frame: [0, 0, 0, 0] };
     var grid = { cols: 0, rows: 0, ox: 0, oy: 0, gx: 1, gy: 1, pts: null, data: null, range: 1 };
     var noise = makeNoise(Math.random());
@@ -377,7 +388,7 @@
       ['uSize', 'uDpr', 'uTime', 'uDisp', 'uGridOrigin', 'uGridGap', 'uGridSize', 'uEnc', 'uRange',
         'uRib', 'uRefr', 'uCurve', 'uMag', 'uHl', 'uShadow', 'uDrag', 'uMouse', 'uFrame',
         'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5',
-        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT', 'uLight', 'uLightOn'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT', 'uLight', 'uLightOn', 'uImg', 'uImgOn', 'uImgScale'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
 
       tex = gl.createTexture();
       gl.activeTexture(gl.TEXTURE0);
@@ -398,7 +409,17 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+      imgTex = gl.createTexture();
+      imgKey = null; imgReady = null;
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, imgTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array(3));
       gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(U.uImg, 2);
       gl.uniform1i(U.uLight, 1);
       applyStaticUniforms();
       return true;
@@ -463,6 +484,35 @@
         }
       }
       gl.uniform1f(U.uLightOn, lightOn ? 1 : 0);
+
+      // image: drawn behind the glass once loaded; the light above shows until then, or if it fails
+      if ((cfg.image || '') !== imgKey) loadImage(cfg.image || '');
+      gl.uniform1f(U.uImgOn, imgReady ? 1 : 0);
+      if (imgReady) {
+        var fa = fw / fh, ia = imgReady.width / imgReady.height;
+        gl.uniform2f(U.uImgScale, ia > fa ? fa / ia : 1, ia > fa ? 1 : ia / fa);
+      }
+    }
+
+    function loadImage(src) {
+      imgKey = src; imgReady = null;
+      if (!src) return;
+      var img = new Image();
+      if (!/^data:/.test(src)) img.crossOrigin = 'anonymous';
+      img.onload = function () {
+        if (destroyed || imgKey !== src || !gl) return;
+        try {
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, imgTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+          gl.activeTexture(gl.TEXTURE0);
+        } catch (e) { console.warn('FlutedHero: could not use image', e); gl.activeTexture(gl.TEXTURE0); return; }
+        imgReady = { width: img.naturalWidth, height: img.naturalHeight };
+        applyStaticUniforms();
+        if (!running) render(performance.now(), true);
+      };
+      img.onerror = function () { console.warn('FlutedHero: could not load image ' + src.slice(0, 80)); };
+      img.src = src;
     }
 
     function buildGrid() {
@@ -718,7 +768,7 @@
     }
   }
 
-  var api = { version: '1.2.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
+  var api = { version: '1.3.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
   global.FlutedHero = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 

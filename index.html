@@ -314,7 +314,7 @@ html, body { margin: 0; }
           <p class="hint" id="image-status" role="status"></p>
         </div>
         <button class="text-btn" id="image-remove" type="button" hidden>Remove image and undo</button>
-        <p class="hint">Copies the rib layout, spacing, colors and light from your picture. It stays in your browser.</p>
+        <p class="hint">Puts your picture behind the glass and matches the ribs to it. Fin height and Rib magnify set how clearly it shows. It stays in your browser.</p>
       </div>
       <div class="group" id="group-pattern">
         <span class="group-title">Pattern</span>
@@ -351,7 +351,7 @@ html, body { margin: 0; }
           <input type="range" id="ctl-hue" min="-180" max="180" step="1" value="0">
         </div>
         <div class="swatches" id="swatches"></div>
-        <p class="hint">Darkest to brightest. Main is the body of the lit glass; Glow core is the white edge on the right.</p>
+        <p class="hint">Darkest to brightest. Main is the body of the lit glass; Glow core is the white edge on the right. While an image is in use, it supplies the colors instead.</p>
       </div>
       <div class="group" id="group-look"><span class="group-title">Glass &amp; light</span></div>
       <div class="group" id="group-motion"><span class="group-title">Cursor &amp; motion</span></div>
@@ -368,7 +368,7 @@ html, body { margin: 0; }
   <div class="install-inner">
     <div>
       <h2>Add it to your site</h2>
-      <p>One dependency-free script, 25&nbsp;KB minified, about 10&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
+      <p>One dependency-free script, 26&nbsp;KB minified, about 11&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
       <p>If your hero already has a background video, keep it inside the section with <code>data-fluted-fallback</code>. The script hides it once WebGL starts, so devices without WebGL still see the video.</p>
       <ul class="facts">
         <li>Tablet and mobile settings switch on by the hero's width, like CSS max-width media queries; Mobile builds on Tablet</li>
@@ -384,9 +384,11 @@ html, body { margin: 0; }
           <span style="display:flex;gap:8px;flex-wrap:wrap">
             <a class="btn" href="fluted-hero.min.js" download>Download minified</a>
             <a class="btn" href="fluted-hero.js" download>Download source</a>
+            <a class="btn" id="download-image" download="fluted-hero-image.jpg" hidden>Download image</a>
           </span>
         </div>
         <p>Upload it to your site, for example as <code>/js/fluted-hero.js</code>.</p>
+        <p id="image-note" hidden>Upload the image too, as <code>/media/fluted-hero-image.jpg</code>, or change that path in the code below.</p>
       </div>
       <div>
         <div class="step-head">
@@ -451,6 +453,7 @@ html, body { margin: 0; }
       { key: 'ribWidth', label: 'Rib width', min: 8, max: 160, step: 1, fmt: function (v) { return v + ' → ' + (fx ? fx.metrics.ribPx.toFixed(1) : v) + ' px'; } },
       { key: 'ribMin', label: 'Min rib width', min: 4, max: 30, step: 1, fmt: function (v) { return v + ' px'; } },
       { key: 'refraction', label: 'Fin height', min: 0, max: 0.18, step: 0.005, fmt: function (v) { return Math.round(v * 1000) / 10 + '%'; } },
+      { key: 'ribMagnify', label: 'Rib magnify', min: 0.1, max: 1, step: 0.01, fmt: fix2 },
       { key: 'ribShadow', label: 'Rib shading', min: 0, max: 0.7, step: 0.01, fmt: fix2 },
       { key: 'lightSpeed', label: 'Light drift speed', min: 0, max: 4, step: 0.1, fmt: function (v) { return (+v).toFixed(1) + '×'; } },
       { key: 'cursorGlow', label: 'Cursor glow', min: 0, max: 0.6, step: 0.01, fmt: fix2 }
@@ -689,7 +692,8 @@ html, body { margin: 0; }
       var keep = { colors: state.desktop.colors, tabletMax: state.desktop.tabletMax, mobileMax: state.desktop.mobileMax };
       PATTERN_KEYS.forEach(function (pk) { keep[pk] = state.desktop[pk]; });   // effect presets leave the pattern alone
       keep.lightMap = state.desktop.lightMap;
-      if (state.desktop.lightMap) ['fit', 'zoom', 'focusX', 'focusY', 'ribWidth'].forEach(function (ik) { keep[ik] = state.desktop[ik]; });
+      keep.image = state.desktop.image;
+      if (state.desktop.lightMap) ['fit', 'zoom', 'focusX', 'focusY', 'ribWidth', 'refraction', 'ribMagnify', 'ribShadow'].forEach(function (ik) { keep[ik] = state.desktop[ik]; });
       var reset = {};
       for (var k in state.desktop) if (!(k in keep)) reset[k] = null;
       state.desktop = {};
@@ -938,11 +942,14 @@ html, body { margin: 0; }
       done('Press Ctrl+C');
     }
   }
-  function optionsObject() {
+  // mode: undefined = for pasting into a site (image as a file path), 'link' = small inline image, 'raw' = as is
+  var IMAGE_PATH = '/media/fluted-hero-image.jpg', linkImage = '';
+  function optionsObject(mode) {
     var out = {};
     for (var k in state.desktop) {
       var v = state.desktop[k];
-      if (Array.isArray(v)) { if (JSON.stringify(v) !== JSON.stringify(D[k])) out[k] = v; }
+      if (k === 'image') { if (v) out.image = mode === 'raw' ? v : mode === 'link' ? (linkImage || v) : IMAGE_PATH; }
+      else if (Array.isArray(v)) { if (JSON.stringify(v) !== JSON.stringify(D[k])) out[k] = v; }
       else if (v !== D[k]) out[k] = v;
     }
     ['tablet', 'mobile'].forEach(function (b) {
@@ -969,6 +976,10 @@ html, body { margin: 0; }
     if (!codeHtml || !codeReact) return;
     var obj = optionsObject(), has = Object.keys(obj).length > 0;
     var json = JSON.stringify(obj, null, 2);
+    var imageLink = document.getElementById('download-image');
+    imageLink.hidden = !state.desktop.image;
+    document.getElementById('image-note').hidden = !state.desktop.image;
+    if (state.desktop.image) imageLink.href = state.desktop.image; else imageLink.removeAttribute('href');
     var attr = has ? "='" + indent(json, '  ').replace(/'/g, '&#39;') + "'" : '';
     codeHtml.textContent =
       '<section class="hero" data-fluted-hero' + attr + '>\n' +
@@ -1035,6 +1046,7 @@ html, body { margin: 0; }
       return v.slice();
     }
     if (k === 'pattern') return FlutedHero.patterns.indexOf(v) !== -1 ? v : undefined;
+    if (k === 'image') return typeof v === 'string' && v.length <= 30000 && /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+={0,2}$/.test(v) ? v : undefined;
     if (k === 'lightMap') return typeof v === 'string' && v.length <= 8000 && /^\d{1,3}x\d{1,3}:[A-Za-z0-9+\/]+={0,2}$/.test(v) ? v : undefined;
     if (k === 'fit') return v === 'cover' || v === 'stretch' ? v : undefined;
     if (typeof D[k] === 'number') return typeof v === 'number' && isFinite(v) ? v : undefined;
@@ -1063,6 +1075,7 @@ html, body { margin: 0; }
   }
   function applyConfig(cfg) {
     state = { desktop: {}, tablet: {}, mobile: {} };
+    if (cfg.image && !linkImage) linkImage = cfg.image;
     for (var k in cfg) {
       if (k === 'tablet' || k === 'mobile') state[k] = JSON.parse(JSON.stringify(cfg[k]));
       else state.desktop[k] = cfg[k];
@@ -1082,7 +1095,7 @@ html, body { margin: 0; }
     if (location.hash) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* noop */ }
   }
   document.getElementById('share-link').addEventListener('click', function (e) {
-    var obj = optionsObject();
+    var obj = optionsObject('link');
     var base = location.href.split('#')[0];
     var url = Object.keys(obj).length ? base + '#s=' + encodeCfg(obj) : base;
     try { history.replaceState(null, '', url); } catch (err) { /* noop */ }
@@ -1098,15 +1111,16 @@ html, body { margin: 0; }
   var DETECTED = { lines: 'straight ribs', wave: 'wavy ribs', zigzag: 'zigzag ribs', rings: 'rings', rays: 'rays', grid: 'a grid' };
   function clearImageUi() {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
-    imageUrl = null; beforeImage = null;
+    imageUrl = null; beforeImage = null; linkImage = '';
     imageThumb.removeAttribute('src');
     imageResult.hidden = true; imageRemove.hidden = true;
     imagePick.textContent = 'Add an image';
     imageFile.value = '';
   }
   function applyAnalysis(r) {
-    if (!beforeImage) beforeImage = JSON.parse(JSON.stringify(optionsObject()));
-    var patch = { lightMap: r.lightMap, fit: 'cover', zoom: 1, focusX: 0.5, focusY: 0.5 };
+    if (!beforeImage) beforeImage = JSON.parse(JSON.stringify(optionsObject('raw')));
+    // Gentler glass than the default, so the design stays recognizable through the ribs.
+    var patch = { image: r.image, lightMap: r.lightMap, fit: 'cover', zoom: 1, focusX: 0.5, focusY: 0.5, refraction: 0.02, ribMagnify: 0.8, ribShadow: 0.24 };
     for (var k in r.settings) patch[k] = r.settings[k];
     // The built-in tablet and mobile framing is tuned for the diagonal light, so image framing replaces it.
     var frame = { zoom: 1, focusX: 0.5, focusY: 0.5 };
@@ -1132,7 +1146,11 @@ html, body { margin: 0; }
     var url = URL.createObjectURL(file), img = new Image();
     img.onload = function () {
       var r;
-      try { r = FlutedAnalyzer.fromImage(img); }
+      try {
+        r = FlutedAnalyzer.fromImage(img);
+        r.image = FlutedAnalyzer.exportImage(img, 1600, 0.86);
+        linkImage = FlutedAnalyzer.exportImage(img, 240, 0.6, 16000);
+      }
       catch (e) { URL.revokeObjectURL(url); say('Could not read that image'); return; }
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       imageUrl = url;
@@ -1141,8 +1159,8 @@ html, body { margin: 0; }
       imageResult.hidden = false; imageRemove.hidden = false;
       imagePick.textContent = 'Use a different image';
       imageStatus.textContent = r.detected
-        ? 'Found ' + DETECTED[r.detected] + '. Fine-tune it in Pattern below.'
-        : 'No clear ribs found, so only its colors and light were used.';
+        ? 'Your image is behind the glass, with ribs laid out as ' + DETECTED[r.detected] + '.'
+        : 'Your image is behind the glass, with straight ribs. Pick another layout in Pattern.';
       layoutStage();
     };
     img.onerror = function () { URL.revokeObjectURL(url); say('Could not read that image'); };
