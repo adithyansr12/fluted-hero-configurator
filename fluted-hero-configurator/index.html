@@ -139,7 +139,10 @@ button, input { font: inherit; color: inherit; }
 .chip:hover { color: var(--fg); }
 .chip[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .group { display: flex; flex-direction: column; gap: 10px; }
-#save-pattern { justify-content: center; padding: 8px 10px; font-size: 11.5px; }
+#save-pattern, #image-pick { justify-content: center; padding: 8px 10px; font-size: 11.5px; }
+#image-remove { align-self: flex-start; }
+.image-result { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: center; }
+.image-result img { width: 96px; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line); }
 .rhythm-strip { display: flex; gap: 2px; height: 22px; }
 .rhythm-strip span { display: block; background: linear-gradient(90deg, var(--accent), rgba(90, 165, 253, 0.25)); }
 .rhythm-cells { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
@@ -302,6 +305,17 @@ html, body { margin: 0; }
           <button class="chip" type="button" data-preset="wavy" aria-pressed="false">Wavy</button>
         </div>
       </div>
+      <div class="group" id="group-image">
+        <span class="group-title">Match an image</span>
+        <input type="file" id="image-file" accept="image/*" hidden>
+        <button class="btn" id="image-pick" type="button">Add an image</button>
+        <div class="image-result" id="image-result" hidden>
+          <img id="image-thumb" alt="Your image">
+          <p class="hint" id="image-status" role="status"></p>
+        </div>
+        <button class="text-btn" id="image-remove" type="button" hidden>Remove image and undo</button>
+        <p class="hint">Copies the rib layout, spacing, colors and light from your picture. It stays in your browser.</p>
+      </div>
       <div class="group" id="group-pattern">
         <span class="group-title">Pattern</span>
         <div class="presets" id="patterns" role="group" aria-label="Rib pattern"></div>
@@ -354,7 +368,7 @@ html, body { margin: 0; }
   <div class="install-inner">
     <div>
       <h2>Add it to your site</h2>
-      <p>One dependency-free script, 23&nbsp;KB minified, about 10&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
+      <p>One dependency-free script, 25&nbsp;KB minified, about 10&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
       <p>If your hero already has a background video, keep it inside the section with <code>data-fluted-fallback</code>. The script hides it once WebGL starts, so devices without WebGL still see the video.</p>
       <ul class="facts">
         <li>Tablet and mobile settings switch on by the hero's width, like CSS max-width media queries; Mobile builds on Tablet</li>
@@ -399,6 +413,7 @@ html, body { margin: 0; }
 </footer>
 
 <script src="fluted-hero.js"></script>
+<script src="pattern-analyzer.js"></script>
 <script>
 (function () {
   'use strict';
@@ -433,7 +448,7 @@ html, body { margin: 0; }
       { key: 'focusY', label: 'Focus top ↕ bottom', min: 0, max: 1, step: 0.01, fmt: pct }
     ],
     look: [
-      { key: 'ribWidth', label: 'Rib width', min: 8, max: 60, step: 1, fmt: function (v) { return v + ' → ' + (fx ? fx.metrics.ribPx.toFixed(1) : v) + ' px'; } },
+      { key: 'ribWidth', label: 'Rib width', min: 8, max: 160, step: 1, fmt: function (v) { return v + ' → ' + (fx ? fx.metrics.ribPx.toFixed(1) : v) + ' px'; } },
       { key: 'ribMin', label: 'Min rib width', min: 4, max: 30, step: 1, fmt: function (v) { return v + ' px'; } },
       { key: 'refraction', label: 'Fin height', min: 0, max: 0.18, step: 0.005, fmt: function (v) { return Math.round(v * 1000) / 10 + '%'; } },
       { key: 'ribShadow', label: 'Rib shading', min: 0, max: 0.7, step: 0.01, fmt: fix2 },
@@ -673,6 +688,8 @@ html, body { margin: 0; }
     if (device === 'desktop') {
       var keep = { colors: state.desktop.colors, tabletMax: state.desktop.tabletMax, mobileMax: state.desktop.mobileMax };
       PATTERN_KEYS.forEach(function (pk) { keep[pk] = state.desktop[pk]; });   // effect presets leave the pattern alone
+      keep.lightMap = state.desktop.lightMap;
+      if (state.desktop.lightMap) ['fit', 'zoom', 'focusX', 'focusY', 'ribWidth'].forEach(function (ik) { keep[ik] = state.desktop[ik]; });
       var reset = {};
       for (var k in state.desktop) if (!(k in keep)) reset[k] = null;
       state.desktop = {};
@@ -883,6 +900,7 @@ html, body { margin: 0; }
     toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 1800);
   }
   document.getElementById('reset').addEventListener('click', function () {
+    clearImageUi();
     state = { desktop: {}, tablet: {}, mobile: {} };
     presetMark = { desktop: 'default', tablet: 'default', mobile: 'default' };
     if (fx) { fx.destroy(); fx = FlutedHero.create(stage, {}); }
@@ -1017,6 +1035,7 @@ html, body { margin: 0; }
       return v.slice();
     }
     if (k === 'pattern') return FlutedHero.patterns.indexOf(v) !== -1 ? v : undefined;
+    if (k === 'lightMap') return typeof v === 'string' && v.length <= 8000 && /^\d{1,3}x\d{1,3}:[A-Za-z0-9+\/]+={0,2}$/.test(v) ? v : undefined;
     if (k === 'fit') return v === 'cover' || v === 'stretch' ? v : undefined;
     if (typeof D[k] === 'number') return typeof v === 'number' && isFinite(v) ? v : undefined;
     if (typeof D[k] === 'boolean') return typeof v === 'boolean' ? v : undefined;
@@ -1069,6 +1088,73 @@ html, body { margin: 0; }
     try { history.replaceState(null, '', url); } catch (err) { /* noop */ }
     copy(url, e.currentTarget, null, 'Link copied');
     say(Object.keys(obj).length ? 'Anyone who opens this link sees these settings' : 'No changes yet, so the link shows the defaults');
+  });
+
+  // ---------- match an image ----------
+  var imageFile = document.getElementById('image-file'), imagePick = document.getElementById('image-pick');
+  var imageResult = document.getElementById('image-result'), imageThumb = document.getElementById('image-thumb');
+  var imageStatus = document.getElementById('image-status'), imageRemove = document.getElementById('image-remove');
+  var imageUrl = null, beforeImage = null;
+  var DETECTED = { lines: 'straight ribs', wave: 'wavy ribs', zigzag: 'zigzag ribs', rings: 'rings', rays: 'rays', grid: 'a grid' };
+  function clearImageUi() {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = null; beforeImage = null;
+    imageThumb.removeAttribute('src');
+    imageResult.hidden = true; imageRemove.hidden = true;
+    imagePick.textContent = 'Add an image';
+    imageFile.value = '';
+  }
+  function applyAnalysis(r) {
+    if (!beforeImage) beforeImage = JSON.parse(JSON.stringify(optionsObject()));
+    var patch = { lightMap: r.lightMap, fit: 'cover', zoom: 1, focusX: 0.5, focusY: 0.5 };
+    for (var k in r.settings) patch[k] = r.settings[k];
+    // The built-in tablet and mobile framing is tuned for the diagonal light, so image framing replaces it.
+    var frame = { zoom: 1, focusX: 0.5, focusY: 0.5 };
+    state.tablet = JSON.parse(JSON.stringify(frame));
+    state.mobile = JSON.parse(JSON.stringify(frame));
+    for (var p in patch) state.desktop[p] = patch[p];
+    if (fx) {
+      fx.set({ tablet: null, mobile: null });
+      fx.set({ tablet: frame, mobile: frame });
+      fx.set(patch);
+    }
+    basePalette = r.colors.slice(); hue = 0;
+    applyColors();
+    markPalette(-1);
+    presetMark = { desktop: null, tablet: null, mobile: null };
+    markPreset(null);
+    sync();
+  }
+  imagePick.addEventListener('click', function () { imageFile.click(); });
+  imageFile.addEventListener('change', function () {
+    var file = imageFile.files && imageFile.files[0];
+    if (!file) return;
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var r;
+      try { r = FlutedAnalyzer.fromImage(img); }
+      catch (e) { URL.revokeObjectURL(url); say('Could not read that image'); return; }
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      imageUrl = url;
+      imageThumb.src = url;
+      applyAnalysis(r);
+      imageResult.hidden = false; imageRemove.hidden = false;
+      imagePick.textContent = 'Use a different image';
+      imageStatus.textContent = r.detected
+        ? 'Found ' + DETECTED[r.detected] + '. Fine-tune it in Pattern below.'
+        : 'No clear ribs found, so only its colors and light were used.';
+      layoutStage();
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); say('Could not read that image'); };
+    img.src = url;
+  });
+  imageRemove.addEventListener('click', function () {
+    var cfg = beforeImage || {};
+    clearImageUi();
+    applyConfig(cfg);
+    setDevice(device);
+    clearHash();
+    say('Image removed and earlier settings restored');
   });
 
   // ---------- start ----------

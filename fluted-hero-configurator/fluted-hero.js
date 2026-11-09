@@ -1,5 +1,5 @@
 /*!
- * Fluted Hero v1.1.0 —interactive fluted-glass background (WebGL, no dependencies)
+ * Fluted Hero v1.2.0 —interactive fluted-glass background (WebGL, no dependencies)
  *
  * Pattern: vertical glass ribs refracting a blue light field (matches the Figma/video design).
  * Interaction: Perlin-noise idle sway + cursor-velocity spring push on every rib,
@@ -52,6 +52,7 @@
     patternCenterX: 0.5,     // rings / rays: center of the pattern (0 = left, 1 = right)
     patternCenterY: 0.5,     // (0 = top, 1 = bottom)
     ribRhythm: [1],          // repeating rib widths as multiples of ribWidth, up to 8, e.g. [1, 1, 3]
+    lightMap: '',            // optional light behind the glass: "WxH:base64" brightness bytes ('' = built-in diagonal light)
 
     // ---- Framing: how the 16:9 design maps onto the hero ----
     fit: 'stretch',          // 'stretch' = squeeze the whole design into the hero, 'cover' = crop it like object-fit: cover
@@ -132,6 +133,7 @@
     'uniform vec3 uC0;uniform vec3 uC1;uniform vec3 uC2;uniform vec3 uC3;uniform vec3 uC4;uniform vec3 uC5;',
     'uniform float uType;uniform vec2 uDir;uniform vec2 uCenter;uniform float uBend;uniform float uWaves;uniform float uRayN;',
     'uniform float uRhy[8];uniform float uRhyN;uniform float uRhyT;',
+    'uniform sampler2D uLight;uniform float uLightOn;',
 
     'vec2 disp(vec2 p){',
     '  vec2 uv=((p-uGridOrigin)/uGridGap+0.5)/uGridSize;',
@@ -154,6 +156,12 @@
     // The light behind the glass: dark navy top-left, diagonal light sheet, bright right edge.
     'float lightField(vec2 s){',
     '  vec2 u=(s-uFrame.xy)/uFrame.zw;float t=uTime;',
+    '  if(uLightOn>0.5){',
+    '    vec2 lu=u+vec2(0.006*sin(u.y*5.0+t*0.21),0.006*sin(u.x*4.0-t*0.17));',
+    '    float L=texture2D(uLight,lu).r;',
+    '    vec2 lm=(s-uMouse.xy)/(0.26*min(uSize.x,uSize.y));',
+    '    return L+uMouse.z*exp(-dot(lm,lm));',
+    '  }',
     '  float wob=0.012*sin(u.x*3.1+t*0.21)+0.007*sin(u.x*7.3-t*0.17);',
     '  float k=max(u.x-0.6,0.0);',
     '  float yb=0.81-0.45*u.x-2.36*k*k+wob;',
@@ -275,6 +283,17 @@
     var n = parseInt(h, 16);
     return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
   }
+  // "WxH:base64" of W*H brightness bytes, top row first. Returns null when empty or malformed.
+  function parseLightMap(str) {
+    var m = /^(\d{1,3})x(\d{1,3}):([A-Za-z0-9+\/]+={0,2})$/.exec(str || '');
+    if (!m) return null;
+    var w = +m[1], h = +m[2], bin;
+    try { bin = atob(m[3]); } catch (e) { return null; }
+    if (!w || !h || bin.length !== w * h) return null;
+    var data = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    return { w: w, h: h, data: data };
+  }
   function assign(target) {
     for (var i = 1; i < arguments.length; i++) {
       var src = arguments[i];
@@ -326,6 +345,7 @@
     container.insertBefore(canvas, container.firstChild);
 
     var gl = null, isGL2 = false, prog = null, buf = null, tex = null, U = {};
+    var lightTex = null, lightKey = null, lightOn = false;
     var metrics = { ribPx: 0, frame: [0, 0, 0, 0] };
     var grid = { cols: 0, rows: 0, ox: 0, oy: 0, gx: 1, gy: 1, pts: null, data: null, range: 1 };
     var noise = makeNoise(Math.random());
@@ -357,7 +377,7 @@
       ['uSize', 'uDpr', 'uTime', 'uDisp', 'uGridOrigin', 'uGridGap', 'uGridSize', 'uEnc', 'uRange',
         'uRib', 'uRefr', 'uCurve', 'uMag', 'uHl', 'uShadow', 'uDrag', 'uMouse', 'uFrame',
         'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5',
-        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT', 'uLight', 'uLightOn'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
 
       tex = gl.createTexture();
       gl.activeTexture(gl.TEXTURE0);
@@ -368,6 +388,18 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       gl.uniform1i(U.uDisp, 0);
+
+      lightTex = gl.createTexture();
+      lightKey = null;
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, lightTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(U.uLight, 1);
       applyStaticUniforms();
       return true;
     }
@@ -416,6 +448,21 @@
       gl.uniform1fv(U.uRhy, slots);
       gl.uniform1f(U.uRhyN, rhythm.length);
       gl.uniform1f(U.uRhyT, total);
+
+      // light map: replaces the built-in diagonal light when set
+      var key = cfg.lightMap || '';
+      if (key !== lightKey) {
+        lightKey = key;
+        var map = parseLightMap(key);
+        lightOn = !!map;
+        if (map) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, lightTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, map.w, map.h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, map.data);
+          gl.activeTexture(gl.TEXTURE0);
+        }
+      }
+      gl.uniform1f(U.uLightOn, lightOn ? 1 : 0);
     }
 
     function buildGrid() {
@@ -671,7 +718,7 @@
     }
   }
 
-  var api = { version: '1.1.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
+  var api = { version: '1.2.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
   global.FlutedHero = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 
