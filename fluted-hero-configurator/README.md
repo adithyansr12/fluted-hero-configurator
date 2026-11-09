@@ -7,8 +7,8 @@ A public page where anyone can tune the interactive fluted-glass hero background
 | File | What it is |
 | --- | --- |
 | `index.html` | The configurator page |
-| `fluted-hero.js` | The effect script, readable source (v1.2.0) |
-| `fluted-hero.min.js` | The same script, minified (25 KB, about 10 KB gzipped) |
+| `fluted-hero.js` | The effect script, readable source (v1.3.0) |
+| `fluted-hero.min.js` | The same script, minified (26 KB, about 11 KB gzipped) |
 | `pattern-analyzer.js` | Reads an uploaded image for the configurator; your own site does not need it |
 | `README.md` | This guide |
 
@@ -36,7 +36,7 @@ Opening `index.html` straight from your disk (`file://`) shows the effect, but t
 
 - **Desktop / Tablet / Mobile** at the top of the settings panel picks which screen you are editing. Tablet settings override Desktop; Mobile settings override both. A dot marks every setting changed for that screen.
 - **Breakpoints** default to a hero up to 1024 px wide for Tablet and up to 640 px for Mobile, and can be changed in the panel.
-- **Match an image** reads a picture in your browser and sets the rib layout, spacing, colors and light to resemble it. Remove image and undo restores your earlier settings. Images are center-cropped to 16:9.
+- **Match an image** puts your picture behind the glass in full color and matches the rib layout and spacing to it. Share links carry a smaller copy of the picture; the generated code points to the file you upload (Download image). Remove image and undo restores your earlier settings. Images are center-cropped to 16:9.
 - **Pattern** picks the rib layout, shapes it with sliders, and sets a repeating rib-width rhythm. **Save this pattern** keeps it in your browser for later; share links and the generated code include the current pattern.
 - **Colors** apply to every screen.
 - **Share link** copies a URL with the settings inside it (after `#s=`). Whoever opens it sees the same settings. Nothing is stored on the server.
@@ -84,6 +84,7 @@ For React, Next.js or Vite, copy the component from the configurator page. It lo
 | `patternBend`, `patternWaves` | `60`, `2` | How far ribs bend (px at a 1920 px design width) and how many repeats (wave, zigzag, rings) |
 | `patternCenterX`, `patternCenterY` | `0.5`, `0.5` | Center of rings or rays (0 = left/top, 1 = right/bottom) |
 | `ribRhythm` | `[1]` | Repeating rib widths as multiples of `ribWidth`, up to 8 values from 0.25 to 6, e.g. `[1, 1, 3]` |
+| `image` | `''` | Picture shown behind the glass in full color: a same-origin or CORS-enabled URL, or a data URI |
 | `lightMap` | `''` | Light behind the glass as `"WxH:base64"` brightness bytes; empty uses the built-in diagonal light. Match an image fills this in |
 | `fit` | `'stretch'` | `'stretch'` squeezes the whole 16:9 design into the hero; `'cover'` crops it to fill |
 | `zoom`, `focusX`, `focusY` | `1`, `0.5`, `0.5` | Zoom and which part stays in view (0 = left/top, 1 = right/bottom) |

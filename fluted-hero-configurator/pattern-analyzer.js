@@ -354,7 +354,7 @@
   }
 
   /* ---------- classification ---------- */
-  function analyze(id) {
+  function inspect(id) {
     var W = id.width, H = id.height;
     var result = colorsAndLight(id);
     var settings = {
@@ -376,7 +376,7 @@
       settings.patternCenterX = Math.round(clamp(c.x / W, 0, 1) * 100) / 100;
       settings.patternCenterY = Math.round(clamp(c.y / H, 0, 1) * 100) / 100;
     }
-    function applySpacing(s) { if (s) { settings.ribWidth = s.ribWidth; settings.ribRhythm = s.ribRhythm; } }
+    function applySpacing(s) { if (s) { settings.ribWidth = s.ribWidth; settings.ribRhythm = s.ribRhythm; out.spaced = true; } }
 
     if (rad.rings.s > 0.6 && rad.rings.s > coh.value + 0.08 && rad.rings.s >= rad.rays.s) {
       settings.pattern = 'rings'; settings.patternBend = 0; settings.patternWaves = 6;
@@ -451,6 +451,23 @@
     return out;
   }
 
+  // A layout only counts when it clearly repeats. Ordinary pictures have edges too, and a single
+  // circle or a few shapes must not be mistaken for ribs.
+  var MAX_REPEAT = 320;   // design px, so at least six repeats across the width
+  function analyze(id) {
+    var out = inspect(id), s = out.settings;
+    var total = s.ribWidth * s.ribRhythm.reduce(function (a, b) { return a + b; }, 0);
+    if (out.detected && (!out.spaced || total > MAX_REPEAT)) {
+      out.detected = null;
+      out.settings = {
+        pattern: 'lines', patternAngle: 0, patternBend: 60, patternWaves: 2,
+        patternCenterX: 0.5, patternCenterY: 0.5, ribRhythm: [1], ribWidth: 25
+      };
+    }
+    delete out.spaced;
+    return out;
+  }
+
   // Center-crops any image to the 16:9 design and analyzes it.
   function fromImage(img) {
     var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
@@ -466,5 +483,22 @@
     return analyze(ctx.getImageData(0, 0, W_ANALYSIS, H_ANALYSIS));
   }
 
-  global.FlutedAnalyzer = { analyze: analyze, fromImage: fromImage };
+  // Center-crops to 16:9 and returns a JPEG data URI. With maxChars, lowers quality and size until it fits.
+  function exportImage(img, width, quality, maxChars) {
+    var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    var scale = Math.min(iw / 16, ih / 9), cw = 16 * scale, ch = 9 * scale;
+    var c = document.createElement('canvas'), ctx = c.getContext('2d');
+    for (;;) {
+      c.width = width; c.height = Math.round(width * 9 / 16);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, (iw - cw) / 2, (ih - ch) / 2, cw, ch, 0, 0, c.width, c.height);
+      var url = c.toDataURL('image/jpeg', quality);
+      if (!maxChars || url.length <= maxChars || width <= 64) return url;
+      if (quality > 0.35) quality -= 0.1; else width = Math.round(width * 0.8);
+    }
+  }
+
+  global.FlutedAnalyzer = { analyze: analyze, fromImage: fromImage, exportImage: exportImage };
 })(typeof window !== 'undefined' ? window : this);
