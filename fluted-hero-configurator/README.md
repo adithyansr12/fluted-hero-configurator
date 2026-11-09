@@ -7,8 +7,8 @@ A public page where anyone can tune the interactive fluted-glass hero background
 | File | What it is |
 | --- | --- |
 | `index.html` | The configurator page |
-| `fluted-hero.js` | The effect script, readable source (v1.0.0) |
-| `fluted-hero.min.js` | The same script, minified (15 KB, about 7 KB gzipped) |
+| `fluted-hero.js` | The effect script, readable source (v1.1.0) |
+| `fluted-hero.min.js` | The same script, minified (23 KB, about 10 KB gzipped) |
 | `README.md` | This guide |
 
 The page loads `fluted-hero.js` from the same folder, and its download buttons point at both script files, so keep all of them together.
@@ -35,6 +35,7 @@ Opening `index.html` straight from your disk (`file://`) shows the effect, but t
 
 - **Desktop / Tablet / Mobile** at the top of the settings panel picks which screen you are editing. Tablet settings override Desktop; Mobile settings override both. A dot marks every setting changed for that screen.
 - **Breakpoints** default to a hero up to 1024 px wide for Tablet and up to 640 px for Mobile, and can be changed in the panel.
+- **Pattern** picks the rib layout, shapes it with sliders, and sets a repeating rib-width rhythm. **Save this pattern** keeps it in your browser for later; share links and the generated code include the current pattern.
 - **Colors** apply to every screen.
 - **Share link** copies a URL with the settings inside it (after `#s=`). Whoever opens it sees the same settings. Nothing is stored on the server.
 - **Copy settings** copies the settings as JSON. The code samples under "Add it to your site" already include them and update as you tune.
@@ -76,6 +77,11 @@ For React, Next.js or Vite, copy the component from the configurator page. It lo
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `colors` | blue palette | Six hex colors, darkest to brightest: background, shade, deep, main, highlight, glow core |
+| `pattern` | `'lines'` | Rib layout: `'lines'`, `'wave'`, `'zigzag'`, `'rings'`, `'rays'` or `'grid'` |
+| `patternAngle` | `0` | Rotation in degrees (lines, wave, zigzag, grid) |
+| `patternBend`, `patternWaves` | `60`, `2` | How far ribs bend (px at a 1920 px design width) and how many repeats (wave, zigzag, rings) |
+| `patternCenterX`, `patternCenterY` | `0.5`, `0.5` | Center of rings or rays (0 = left/top, 1 = right/bottom) |
+| `ribRhythm` | `[1]` | Repeating rib widths as multiples of `ribWidth`, up to 8 values from 0.25 to 6, e.g. `[1, 1, 3]` |
 | `fit` | `'stretch'` | `'stretch'` squeezes the whole 16:9 design into the hero; `'cover'` crops it to fill |
 | `zoom`, `focusX`, `focusY` | `1`, `0.5`, `0.5` | Zoom and which part stays in view (0 = left/top, 1 = right/bottom) |
 | `ribWidth`, `ribMin` | `25`, `10` | Rib width in px at a 1920 px design width, and the smallest it may get |

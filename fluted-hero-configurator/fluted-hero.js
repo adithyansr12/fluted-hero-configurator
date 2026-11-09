@@ -1,5 +1,5 @@
 /*!
- * Fluted Hero v1.0.0 — interactive fluted-glass background (WebGL, no dependencies)
+ * Fluted Hero v1.1.0 —interactive fluted-glass background (WebGL, no dependencies)
  *
  * Pattern: vertical glass ribs refracting a blue light field (matches the Figma/video design).
  * Interaction: Perlin-noise idle sway + cursor-velocity spring push on every rib,
@@ -44,6 +44,15 @@
     // Any hex values work; pass fewer than six and the last one repeats.
     colors: ['#00061A', '#001E5F', '#055AE1', '#1470FA', '#5AA5FD', '#C8EBFD'],
 
+    // ---- Pattern: how the ribs are laid out ----
+    pattern: 'lines',        // 'lines' | 'wave' | 'zigzag' | 'rings' | 'rays' | 'grid'
+    patternAngle: 0,         // rotation in degrees (lines, wave, zigzag, grid)
+    patternBend: 60,         // wave / zigzag / rings: how far the ribs bend, in px at a 1920px design width
+    patternWaves: 2,         // wave / zigzag: repeats per design height; rings: lobes around the circle
+    patternCenterX: 0.5,     // rings / rays: center of the pattern (0 = left, 1 = right)
+    patternCenterY: 0.5,     // (0 = top, 1 = bottom)
+    ribRhythm: [1],          // repeating rib widths as multiples of ribWidth, up to 8, e.g. [1, 1, 3]
+
     // ---- Framing: how the 16:9 design maps onto the hero ----
     fit: 'stretch',          // 'stretch' = squeeze the whole design into the hero, 'cover' = crop it like object-fit: cover
     zoom: 1,                 // >1 zooms in, <1 shows more of the design around it
@@ -75,6 +84,8 @@
     adaptiveQuality: true,  // lowers internal resolution on slow GPUs
     pauseOffscreen: true
   };
+
+  var PATTERNS = ['lines', 'wave', 'zigzag', 'rings', 'rays', 'grid'];
 
   /* ------------------------------------------------------------------ */
   /* Perlin noise (2D, improved)                                          */
@@ -119,6 +130,8 @@
     'uniform float uHl;uniform float uShadow;uniform float uDrag;',
     'uniform vec3 uMouse;uniform vec4 uFrame;',
     'uniform vec3 uC0;uniform vec3 uC1;uniform vec3 uC2;uniform vec3 uC3;uniform vec3 uC4;uniform vec3 uC5;',
+    'uniform float uType;uniform vec2 uDir;uniform vec2 uCenter;uniform float uBend;uniform float uWaves;uniform float uRayN;',
+    'uniform float uRhy[8];uniform float uRhyN;uniform float uRhyT;',
 
     'vec2 disp(vec2 p){',
     '  vec2 uv=((p-uGridOrigin)/uGridGap+0.5)/uGridSize;',
@@ -167,20 +180,68 @@
     '  return I;',
     '}',
 
-    'vec3 shade(vec2 p,out float fr){',
+    // Pattern layout: distance across the ribs at q, in px. 0 lines, 1 wave, 2 zigzag, 3 rings, 4 rays, 5 grid.
+    'vec2 patCenter(){return uFrame.xy+uFrame.zw*uCenter;}',
+    'float ribV(vec2 q){',
+    '  if(uType>2.5&&uType<4.5){',
+    '    vec2 e=q-patCenter();float a=atan(e.y,e.x);',
+    '    if(uType>3.5)return a/6.2831853*uRayN*uRib;',
+    '    return length(e)+uBend*sin(a*uWaves);',
+    '  }',
+    '  float v=dot(q,uDir);',
+    '  if(uType>0.5&&uType<2.5){',
+    '    float al=dot(q-uFrame.xy,vec2(-uDir.y,uDir.x))/uFrame.w*uWaves;',
+    '    v+=uType<1.5?uBend*sin(al*6.2831853):uBend*(abs(fract(al)-0.5)*4.0-1.0);',
+    '  }',
+    '  return v;',
+    '}',
+    // Unit direction across the ribs at q, and how fast ribV changes per px.
+    'void ribN(vec2 q,out vec2 n,out float gm){',
+    '  if(uType<0.5||uType>4.5){n=uDir;gm=1.0;return;}',
+    '  if(uType>3.5){',
+    '    vec2 e=q-patCenter();float l=max(length(e),0.001);',
+    '    n=vec2(-e.y,e.x)/l;gm=uRayN*uRib/(6.2831853*l);return;',
+    '  }',
+    '  float v0=ribV(q);',
+    '  vec2 g=vec2(ribV(q+vec2(0.5,0.0))-v0,ribV(q+vec2(0.0,0.5))-v0)*2.0;',
+    '  gm=max(length(g),0.001);n=g/gm;',
+    '}',
+    // Position inside the current rib (0..1) and that rib's width, following the width rhythm.
+    'float ribCell(float v,out float w){',
+    '  w=uRib;',
+    '  if(uRhyN<1.5)return fract(v/uRib);',
+    '  float m=mod(v/uRib,uRhyT),a=0.0;',
+    '  for(int i=0;i<8;i++){',
+    '    if(float(i)>=uRhyN)break;',
+    '    if(m<a+uRhy[i]){w=uRhy[i]*uRib;return (m-a)/uRhy[i];}',
+    '    a+=uRhy[i];',
+    '  }',
+    '  return 0.0;',
+    '}',
+
+    'vec3 shade(vec2 p,out vec4 o,out vec2 n){',
     '  vec2 d=disp(p);',
     '  vec2 q=p-d;',
-    '  float r=q.x/uRib;',
-    '  float f=fract(r);',
-    '  fr=f;',
+    '  float gm,w;',
+    '  ribN(q,n,gm);',
+    '  float f=ribCell(ribV(q),w);',
+    '  float g=uType>4.5?fract(dot(q,vec2(-uDir.y,uDir.x))/uRib):0.0;',
+    // rays get thinner than a pixel at their center, so the glass fades out there
+    '  float fd=(uType>3.5&&uType<4.5)?smoothstep(0.02,0.09,length(q-patCenter())/uFrame.w):1.0;',
+    '  o=vec4(f,w,g,gm);',
     '  vec2 s=p-d*uDrag;',
-    '  s.x+=(f-0.5)*uRib*(uMag-1.0);',
-    '  s.y+=uRefr*uFrame.w*pow(1.0-f,uCurve);',
+    '  s+=n*(f-0.5)*w*(uMag-1.0)*fd;',
+    '  s+=vec2(-n.y,n.x)*uRefr*uFrame.w*pow(1.0-f,uCurve)*fd;',
+    '  if(uType>4.5)s+=n*uRefr*uFrame.w*0.6*pow(1.0-g,uCurve);',
     '  float I=lightField(s);',
     '  vec3 c=ramp(I);',
-    '  float sh=uShadow*(1.0-0.6*smoothstep(0.7,1.1,I));',
+    '  float sh=uShadow*fd*(1.0-0.6*smoothstep(0.7,1.1,I));',
     '  c*=1.0+0.5*sh-sh*smoothstep(0.05,1.0,f);',
-    '  c*=1.0-uHl*exp(-pow(f*uRib/1.4,2.0));',
+    '  c*=1.0-uHl*fd*exp(-pow(f*w/gm/1.4,2.0));',
+    '  if(uType>4.5){',
+    '    c*=1.0+0.25*sh-0.5*sh*smoothstep(0.05,1.0,g);',
+    '    c*=1.0-uHl*exp(-pow(g*uRib/1.4,2.0));',
+    '  }',
     '  return c;',
     '}',
 
@@ -188,13 +249,18 @@
 
     'void main(){',
     '  vec2 p=vec2(gl_FragCoord.x,uSize.y*uDpr-gl_FragCoord.y)/uDpr;',
-    '  float f;',
-    '  vec3 col=shade(p,f);',
+    '  vec4 o,o2;vec2 n,n2;',
+    '  vec3 col=shade(p,o,n);',
     // antialias only the rib seams: one extra sample on the other side of the seam
     '  float px=1.0/uDpr;',
-    '  float dl=f*uRib, dr=(1.0-f)*uRib, f2;',
-    '  if(dl<px*0.75){col=mix(shade(p-vec2(px,0.0),f2),col,0.5+0.5*dl/(px*0.75));}',
-    '  else if(dr<px*0.75){col=mix(shade(p+vec2(px,0.0),f2),col,0.5+0.5*dr/(px*0.75));}',
+    '  float dl=o.x*o.y/o.w, dr=(1.0-o.x)*o.y/o.w;',
+    '  if(dl<px*0.75){col=mix(shade(p-n*px,o2,n2),col,0.5+0.5*dl/(px*0.75));}',
+    '  else if(dr<px*0.75){col=mix(shade(p+n*px,o2,n2),col,0.5+0.5*dr/(px*0.75));}',
+    '  if(uType>4.5){',
+    '    vec2 t=vec2(-uDir.y,uDir.x);float gl=o.z*uRib,gr=(1.0-o.z)*uRib;',
+    '    if(gl<px*0.75){col=mix(shade(p-t*px,o2,n2),col,0.5+0.5*gl/(px*0.75));}',
+    '    else if(gr<px*0.75){col=mix(shade(p+t*px,o2,n2),col,0.5+0.5*gr/(px*0.75));}',
+    '  }',
     '  col+=(hash(gl_FragCoord.xy+fract(uTime))-0.5)/255.0;',
     '  gl_FragColor=vec4(col,1.0);',
     '}'
@@ -290,7 +356,8 @@
 
       ['uSize', 'uDpr', 'uTime', 'uDisp', 'uGridOrigin', 'uGridGap', 'uGridSize', 'uEnc', 'uRange',
         'uRib', 'uRefr', 'uCurve', 'uMag', 'uHl', 'uShadow', 'uDrag', 'uMouse', 'uFrame',
-        'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+        'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5',
+        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
 
       tex = gl.createTexture();
       gl.activeTexture(gl.TEXTURE0);
@@ -326,6 +393,29 @@
       gl.uniform1f(U.uDrag, cfg.lightDrag);
       var c = cfg.colors;
       for (var i = 0; i < 6; i++) gl.uniform3fv(U['uC' + i], hexToRgb(c[Math.min(i, c.length - 1)]));
+
+      // pattern
+      var type = Math.max(0, PATTERNS.indexOf(cfg.pattern));
+      var rad = (+cfg.patternAngle || 0) * Math.PI / 180;
+      var rhythm = (Array.isArray(cfg.ribRhythm) ? cfg.ribRhythm : []).map(Number)
+        .filter(function (v) { return isFinite(v) && v > 0; }).slice(0, 8);
+      if (!rhythm.length) rhythm = [1];
+      var total = 0, slots = new Float32Array(8);
+      rhythm.forEach(function (v, n) { slots[n] = v; total += v; });
+      var waves = Math.max(0.1, +cfg.patternWaves || 1);
+      if (type === 3) waves = Math.max(1, Math.round(waves));   // rings: a whole number of lobes, so no seam
+      var bend = (+cfg.patternBend || 0) * (cfg.ribScale && W ? fw / 1920 : 1);
+      // rays: a whole number of rhythm repeats around the circle, so no seam
+      var rayRepeats = Math.max(3, Math.round(2 * Math.PI * 0.25 * fw / (metrics.ribPx * total)));
+      gl.uniform1f(U.uType, type);
+      gl.uniform2f(U.uDir, Math.cos(rad), Math.sin(rad));
+      gl.uniform2f(U.uCenter, cfg.patternCenterX, cfg.patternCenterY);
+      gl.uniform1f(U.uBend, bend);
+      gl.uniform1f(U.uWaves, waves);
+      gl.uniform1f(U.uRayN, rayRepeats * total);
+      gl.uniform1fv(U.uRhy, slots);
+      gl.uniform1f(U.uRhyN, rhythm.length);
+      gl.uniform1f(U.uRhyT, total);
     }
 
     function buildGrid() {
@@ -581,7 +671,7 @@
     }
   }
 
-  var api = { version: '1.0.0', create: create, defaults: DEFAULTS };
+  var api = { version: '1.1.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
   global.FlutedHero = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 

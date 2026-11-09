@@ -139,6 +139,20 @@ button, input { font: inherit; color: inherit; }
 .chip:hover { color: var(--fg); }
 .chip[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .group { display: flex; flex-direction: column; gap: 10px; }
+#save-pattern { justify-content: center; padding: 8px 10px; font-size: 11.5px; }
+.rhythm-strip { display: flex; gap: 2px; height: 22px; }
+.rhythm-strip span { display: block; background: linear-gradient(90deg, var(--accent), rgba(90, 165, 253, 0.25)); }
+.rhythm-cells { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.rhythm-cells input {
+  width: 100%; min-width: 0; font-family: var(--font-mono); font-size: 12px;
+  background: var(--code-bg); border: 1px solid var(--line); padding: 5px 4px 5px 7px;
+}
+.rhythm-actions { display: flex; gap: 14px; }
+.saved { display: flex; flex-wrap: wrap; gap: 6px; }
+.saved:empty { display: none; }
+.saved-item { display: inline-flex; }
+.saved-item .chip { padding-inline: 8px; }
+.saved-item .chip + .chip { border-left: 0; }
 .group-title { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .group-title em { font-style: normal; color: var(--fg); opacity: 0.7; letter-spacing: 0.06em; text-transform: none; }
 .ctl { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: baseline; }
@@ -288,6 +302,23 @@ html, body { margin: 0; }
           <button class="chip" type="button" data-preset="wavy" aria-pressed="false">Wavy</button>
         </div>
       </div>
+      <div class="group" id="group-pattern">
+        <span class="group-title">Pattern</span>
+        <div class="presets" id="patterns" role="group" aria-label="Rib pattern"></div>
+        <div class="group" id="pattern-sliders"></div>
+        <div class="ctl">
+          <span class="lbl" id="lbl-rhythm">Rib width rhythm</span><output id="out-rhythm"></output>
+        </div>
+        <div class="rhythm-strip" id="rhythm-strip" aria-hidden="true"></div>
+        <div class="rhythm-cells" id="rhythm-cells" role="group" aria-labelledby="lbl-rhythm"></div>
+        <div class="rhythm-actions">
+          <button class="text-btn" id="rhythm-add" type="button">Add rib</button>
+          <button class="text-btn" id="rhythm-remove" type="button">Remove rib</button>
+        </div>
+        <p class="hint">Each number is a rib width, as a multiple of Rib width. The sequence repeats across the glass.</p>
+        <button class="btn" id="save-pattern" type="button">Save this pattern</button>
+        <div class="saved" id="saved-patterns" aria-label="Your saved patterns"></div>
+      </div>
       <div class="group" id="group-frame">
         <span class="group-title">Framing</span>
         <div class="ctl">
@@ -323,7 +354,7 @@ html, body { margin: 0; }
   <div class="install-inner">
     <div>
       <h2>Add it to your site</h2>
-      <p>One dependency-free script, 15&nbsp;KB minified, about 7&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
+      <p>One dependency-free script, 23&nbsp;KB minified, about 10&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
       <p>If your hero already has a background video, keep it inside the section with <code>data-fluted-fallback</code>. The script hides it once WebGL starts, so devices without WebGL still see the video.</p>
       <ul class="facts">
         <li>Tablet and mobile settings switch on by the hero's width, like CSS max-width media queries; Mobile builds on Tablet</li>
@@ -389,6 +420,13 @@ html, body { margin: 0; }
   function fix2(v) { return (+v).toFixed(2); }
   function pct(v) { return Math.round(v * 100) + '%'; }
   var CONTROLS = {
+    pattern: [
+      { key: 'patternAngle', label: 'Angle', min: -90, max: 90, step: 1, keepPreset: true, only: ['lines', 'wave', 'zigzag', 'grid'], fmt: function (v) { return v + '°'; } },
+      { key: 'patternBend', label: 'Bend', min: 0, max: 240, step: 1, keepPreset: true, only: ['wave', 'zigzag', 'rings'], fmt: function (v) { return v + ' px'; } },
+      { key: 'patternWaves', label: 'Repeats', min: 0.5, max: 12, step: 0.5, keepPreset: true, only: ['wave', 'zigzag', 'rings'], fmt: function (v) { return (+v).toFixed(1); } },
+      { key: 'patternCenterX', label: 'Center left ↔ right', min: 0, max: 1, step: 0.01, keepPreset: true, only: ['rings', 'rays'], fmt: pct },
+      { key: 'patternCenterY', label: 'Center top ↕ bottom', min: 0, max: 1, step: 0.01, keepPreset: true, only: ['rings', 'rays'], fmt: pct }
+    ],
     frame: [
       { key: 'zoom', label: 'Zoom', min: 0.4, max: 2.5, step: 0.05, fmt: function (v) { return (+v).toFixed(2) + '×'; } },
       { key: 'focusX', label: 'Focus left ↔ right', min: 0, max: 1, step: 0.01, fmt: pct },
@@ -438,17 +476,18 @@ html, body { margin: 0; }
         '<input type="range" id="' + id + '" min="' + c.min + '" max="' + c.max + '" step="' + c.step + '">';
       g.appendChild(wrap);
       var input = wrap.querySelector('input');
-      inputs[c.key] = { input: input, out: wrap.querySelector('output'), label: wrap.querySelector('label'), c: c };
+      inputs[c.key] = { input: input, out: wrap.querySelector('output'), label: wrap.querySelector('label'), wrap: wrap, c: c };
       input.addEventListener('input', function () {
         var v = parseFloat(input.value), patch = {};
         patch[c.key] = v;
         if (c.key === 'waveAmpX') patch.waveAmpY = Math.round(v / 2);
         setOpt(patch);
-        markPreset(null);
+        if (!c.keepPreset) markPreset(null);
         sync();
       });
     });
   }
+  build('pattern-sliders', CONTROLS.pattern);
   build('group-frame', CONTROLS.frame);
   build('group-look', CONTROLS.look);
   build('group-motion', CONTROLS.motion);
@@ -459,14 +498,155 @@ html, body { margin: 0; }
     b.addEventListener('click', function () { setOpt({ fit: b.getAttribute('data-fit') }); markPreset(null); sync(); });
   });
 
+  // ---------- pattern ----------
+  var PATTERN_KEYS = ['pattern', 'patternAngle', 'patternBend', 'patternWaves', 'patternCenterX', 'patternCenterY', 'ribRhythm'];
+  var PATTERN_CHIPS = [
+    { id: 'lines', name: 'Straight', patch: { patternAngle: 0 } },
+    { id: 'wave', name: 'Wave', patch: { patternAngle: 0, patternBend: 60, patternWaves: 2 } },
+    { id: 'zigzag', name: 'Zigzag', patch: { patternAngle: 0, patternBend: 50, patternWaves: 3 } },
+    { id: 'rings', name: 'Rings', patch: { patternBend: 0, patternWaves: 6, patternCenterX: 0.7, patternCenterY: 0.65 } },
+    { id: 'rays', name: 'Rays', patch: { patternCenterX: 0.75, patternCenterY: 0.7 } },
+    { id: 'grid', name: 'Grid', patch: { patternAngle: 0 } }
+  ];
+  var patWrap = document.getElementById('patterns');
+  PATTERN_CHIPS.forEach(function (p) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = p.name;
+    b.setAttribute('data-pattern', p.id);
+    b.addEventListener('click', function () {
+      var patch = { pattern: p.id };
+      for (var k in p.patch) patch[k] = p.patch[k];
+      setOpt(patch);
+      sync();
+    });
+    patWrap.appendChild(b);
+  });
+
+  var strip = document.getElementById('rhythm-strip'), cells = document.getElementById('rhythm-cells');
+  var rhythmAdd = document.getElementById('rhythm-add'), rhythmRemove = document.getElementById('rhythm-remove');
+  var RHYTHM_MIN = 0.25, RHYTHM_MAX = 6, RHYTHM_SLOTS = 8, drawnRhythm = '';
+  function rhythm() { var r = eff('ribRhythm'); return Array.isArray(r) && r.length ? r.slice() : [1]; }
+  function renderRhythm() {
+    var r = rhythm(), key = JSON.stringify(r);
+    strip.innerHTML = '';
+    r.forEach(function (v) {
+      var s = document.createElement('span');
+      s.style.flex = v + ' 1 0';
+      strip.appendChild(s);
+    });
+    document.getElementById('out-rhythm').textContent = r.length === 1 ? 'even ribs' : r.length + ' ribs, repeating';
+    document.getElementById('lbl-rhythm').classList.toggle('is-set', isSet('ribRhythm'));
+    rhythmAdd.disabled = r.length >= RHYTHM_SLOTS;
+    rhythmRemove.disabled = r.length <= 1;
+    if (key === drawnRhythm && cells.children.length === r.length) return;   // keeps focus while typing
+    if (cells.contains(document.activeElement) && cells.children.length === r.length) { drawnRhythm = key; return; }
+    drawnRhythm = key;
+    cells.innerHTML = '';
+    r.forEach(function (v, i) {
+      var input = document.createElement('input');
+      input.type = 'number';
+      input.min = RHYTHM_MIN; input.max = RHYTHM_MAX; input.step = 0.25; input.value = v;
+      input.setAttribute('aria-label', 'Rib ' + (i + 1) + ' width');
+      input.addEventListener('input', function () {
+        var n = parseFloat(input.value);
+        if (!isFinite(n) || n < RHYTHM_MIN || n > RHYTHM_MAX) return;
+        var next = rhythm(); next[i] = n;
+        setOpt({ ribRhythm: next });
+        sync();
+      });
+      input.addEventListener('change', function () {
+        var n = parseFloat(input.value);
+        var cur = rhythm();
+        input.value = isFinite(n) ? Math.max(RHYTHM_MIN, Math.min(RHYTHM_MAX, n)) : cur[i];
+        input.dispatchEvent(new Event('input'));
+      });
+      cells.appendChild(input);
+    });
+  }
+  rhythmAdd.addEventListener('click', function () {
+    var r = rhythm();
+    if (r.length >= RHYTHM_SLOTS) return;
+    r.push(r.length % 2 ? 2 : 1);
+    setOpt({ ribRhythm: r });
+    sync();
+  });
+  rhythmRemove.addEventListener('click', function () {
+    var r = rhythm();
+    if (r.length <= 1) return;
+    r.pop();
+    setOpt({ ribRhythm: r });
+    sync();
+  });
+
+  // Saved patterns stay in this browser only.
+  var SAVE_KEY = 'fluted-hero-patterns', savedWrap = document.getElementById('saved-patterns');
+  var saved = [];
+  function readSaved() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(SAVE_KEY));
+      return Array.isArray(raw) ? raw.filter(function (p) { return p && typeof p.name === 'string' && p.opts && typeof p.opts === 'object'; }) : [];
+    } catch (e) { return []; }
+  }
+  function writeSaved() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(saved)); return true; } catch (e) { return false; }
+  }
+  function currentPattern() {
+    var o = {};
+    PATTERN_KEYS.forEach(function (k) { o[k] = k === 'ribRhythm' ? rhythm() : eff(k); });
+    return o;
+  }
+  function renderSaved() {
+    savedWrap.innerHTML = '';
+    saved.forEach(function (p, i) {
+      var item = document.createElement('span');
+      item.className = 'saved-item';
+      var use = document.createElement('button');
+      use.type = 'button'; use.className = 'chip'; use.textContent = p.name;
+      use.addEventListener('click', function () {
+        var patch = {};
+        PATTERN_KEYS.forEach(function (k) {
+          var v = k in p.opts ? cleanValue(k, p.opts[k]) : undefined;
+          if (v !== undefined) patch[k] = v;
+        });
+        setOpt(patch);
+        sync();
+        say('Applied ' + p.name);
+      });
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'chip'; del.textContent = '×';
+      del.setAttribute('aria-label', 'Delete ' + p.name);
+      del.addEventListener('click', function () {
+        saved.splice(i, 1);
+        writeSaved();
+        renderSaved();
+        say('Deleted ' + p.name);
+      });
+      item.appendChild(use); item.appendChild(del);
+      savedWrap.appendChild(item);
+    });
+  }
+  document.getElementById('save-pattern').addEventListener('click', function () {
+    var names = saved.map(function (p) { return p.name; }), n = 1;
+    while (names.indexOf('My pattern ' + n) !== -1) n++;
+    var name = 'My pattern ' + n;
+    saved.push({ name: name, opts: currentPattern() });
+    var ok = writeSaved();
+    renderSaved();
+    say(ok ? 'Saved as ' + name + ' in this browser' : 'Saved until you close this page: browser storage is off');
+  });
+
   function isSet(k) { return device !== 'desktop' && k in state[device]; }
   function sync() {
+    var kind = eff('pattern');
     for (var k in inputs) {
       var v = eff(k), it = inputs[k];
       it.input.value = v;
       it.out.textContent = it.c.fmt(v);
       it.label.classList.toggle('is-set', isSet(k));
+      if (it.c.only) it.wrap.hidden = it.c.only.indexOf(kind) === -1;
     }
+    patWrap.querySelectorAll('[data-pattern]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-pattern') === kind)); });
+    renderRhythm();
     var fit = eff('fit');
     fitBtns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-fit') === fit)); });
     fitLabel.classList.toggle('is-set', isSet('fit'));
@@ -492,6 +672,7 @@ html, body { margin: 0; }
     var p = PRESETS[name] || {};
     if (device === 'desktop') {
       var keep = { colors: state.desktop.colors, tabletMax: state.desktop.tabletMax, mobileMax: state.desktop.mobileMax };
+      PATTERN_KEYS.forEach(function (pk) { keep[pk] = state.desktop[pk]; });   // effect presets leave the pattern alone
       var reset = {};
       for (var k in state.desktop) if (!(k in keep)) reset[k] = null;
       state.desktop = {};
@@ -743,7 +924,7 @@ html, body { margin: 0; }
     var out = {};
     for (var k in state.desktop) {
       var v = state.desktop[k];
-      if (k === 'colors') { if (JSON.stringify(v) !== JSON.stringify(D.colors)) out.colors = v; }
+      if (Array.isArray(v)) { if (JSON.stringify(v) !== JSON.stringify(D[k])) out[k] = v; }
       else if (v !== D[k]) out[k] = v;
     }
     ['tablet', 'mobile'].forEach(function (b) {
@@ -830,6 +1011,12 @@ html, body { margin: 0; }
       while (out.length < 6) out.push(out[out.length - 1]);
       return out;
     }
+    if (k === 'ribRhythm') {
+      if (!Array.isArray(v) || !v.length || v.length > 8) return undefined;
+      for (var j = 0; j < v.length; j++) if (typeof v[j] !== 'number' || !(v[j] >= 0.25 && v[j] <= 6)) return undefined;
+      return v.slice();
+    }
+    if (k === 'pattern') return FlutedHero.patterns.indexOf(v) !== -1 ? v : undefined;
     if (k === 'fit') return v === 'cover' || v === 'stretch' ? v : undefined;
     if (typeof D[k] === 'number') return typeof v === 'number' && isFinite(v) ? v : undefined;
     if (typeof D[k] === 'boolean') return typeof v === 'boolean' ? v : undefined;
@@ -885,6 +1072,8 @@ html, body { margin: 0; }
   });
 
   // ---------- start ----------
+  saved = readSaved();
+  renderSaved();
   var loadedFromLink = false;
   var m = /[#&]s=([A-Za-z0-9_-]+)/.exec(location.hash);
   if (m) {
