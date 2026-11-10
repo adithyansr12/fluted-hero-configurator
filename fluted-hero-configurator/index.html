@@ -141,6 +141,11 @@ button, input { font: inherit; color: inherit; }
 .group { display: flex; flex-direction: column; gap: 10px; }
 #save-pattern, #image-pick { justify-content: center; padding: 8px 10px; font-size: 11.5px; }
 #image-remove { align-self: flex-start; }
+.glsl {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px;
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.45; tab-size: 2;
+  background: var(--code-bg); color: var(--fg); border: 1px solid var(--line); padding: 8px;
+}
 .image-result { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: center; }
 .image-result img { width: 96px; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line); }
 .rhythm-strip { display: flex; gap: 2px; height: 22px; }
@@ -313,8 +318,15 @@ html, body { margin: 0; }
           <img id="image-thumb" alt="Your image">
           <p class="hint" id="image-status" role="status"></p>
         </div>
+        <div class="ctl" id="image-mode-row" hidden>
+          <span class="lbl" id="lbl-image-mode">Use the image as</span><output id="out-image-mode"></output>
+          <div class="seg" role="group" aria-labelledby="lbl-image-mode">
+            <button type="button" data-image-mode="exact" aria-pressed="true">Exact design</button>
+            <button type="button" data-image-mode="glass" aria-pressed="false">Behind glass</button>
+          </div>
+        </div>
         <button class="text-btn" id="image-remove" type="button" hidden>Remove image and undo</button>
-        <p class="hint">Puts your picture behind the glass and matches the ribs to it. Fin height and Rib magnify set how clearly it shows. It stays in your browser.</p>
+        <p class="hint" id="image-hint">Exact design shows your picture pixel for pixel; the cursor bends it and nothing else is added. Behind glass lays procedural ribs over it instead. It stays in your browser.</p>
       </div>
       <div class="group" id="group-pattern">
         <span class="group-title">Pattern</span>
@@ -355,6 +367,17 @@ html, body { margin: 0; }
       </div>
       <div class="group" id="group-look"><span class="group-title">Glass &amp; light</span></div>
       <div class="group" id="group-motion"><span class="group-title">Cursor &amp; motion</span></div>
+      <div class="group" id="group-custom">
+        <span class="group-title">Custom animation <em>· GLSL, all screens</em></span>
+        <div class="presets" id="anim-examples" role="group" aria-label="Animation examples"></div>
+        <textarea id="custom-glsl" class="glsl" rows="8" spellcheck="false" autocomplete="off" aria-label="Custom animation GLSL"
+          placeholder="vec2 fhWarp(vec2 uv, float t, vec2 m, float h) {&#10;  return uv;&#10;}"></textarea>
+        <div class="rhythm-actions">
+          <button class="text-btn" id="glsl-apply" type="button">Apply</button>
+          <button class="text-btn" id="glsl-clear" type="button">Clear</button>
+        </div>
+        <p class="hint">Define <code>fhWarp</code> (where to sample the image) and/or <code>fhColor</code> (final color). <code>uv</code> is 0..1 across the design, <code>t</code> is seconds, <code>m</code> is the cursor in uv, <code>h</code> is 1 while hovering. <code>imageAt(uv)</code> reads your image. Code that fails to compile is ignored; the browser console says why.</p>
+      </div>
     </div>
     <div class="panel-foot">
       <button class="btn" id="reset" type="button">Reset all</button>
@@ -368,7 +391,7 @@ html, body { margin: 0; }
   <div class="install-inner">
     <div>
       <h2>Add it to your site</h2>
-      <p>One dependency-free script, 26&nbsp;KB minified, about 11&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
+      <p>One dependency-free script, 29&nbsp;KB minified, about 12&nbsp;KB over the wire. It draws into a canvas behind your hero content and reacts to the cursor anywhere over the section.</p>
       <p>If your hero already has a background video, keep it inside the section with <code>data-fluted-fallback</code>. The script hides it once WebGL starts, so devices without WebGL still see the video.</p>
       <ul class="facts">
         <li>Tablet and mobile settings switch on by the hero's width, like CSS max-width media queries; Mobile builds on Tablet</li>
@@ -654,15 +677,21 @@ html, body { margin: 0; }
   });
 
   function isSet(k) { return device !== 'desktop' && k in state[device]; }
+  // Settings that only shape the procedural glass; exact mode shows the image as it is, so they are hidden there.
+  var GLASS_ONLY = { ribWidth: 1, ribMin: 1, refraction: 1, ribMagnify: 1, ribShadow: 1 };
+  function isExact() { return !!state.desktop.image && eff('imageMode') === 'exact'; }
   function sync() {
-    var kind = eff('pattern');
+    var kind = eff('pattern'), exact = isExact();
     for (var k in inputs) {
       var v = eff(k), it = inputs[k];
       it.input.value = v;
       it.out.textContent = it.c.fmt(v);
       it.label.classList.toggle('is-set', isSet(k));
-      if (it.c.only) it.wrap.hidden = it.c.only.indexOf(kind) === -1;
+      it.wrap.hidden = (it.c.only && it.c.only.indexOf(kind) === -1) || (exact && !!GLASS_ONLY[k]);
     }
+    document.getElementById('group-pattern').hidden = exact;
+    document.getElementById('group-colors').hidden = exact;
+    syncImageMode();
     patWrap.querySelectorAll('[data-pattern]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-pattern') === kind)); });
     renderRhythm();
     var fit = eff('fit');
@@ -693,7 +722,9 @@ html, body { margin: 0; }
       PATTERN_KEYS.forEach(function (pk) { keep[pk] = state.desktop[pk]; });   // effect presets leave the pattern alone
       keep.lightMap = state.desktop.lightMap;
       keep.image = state.desktop.image;
-      if (state.desktop.lightMap) ['fit', 'zoom', 'focusX', 'focusY', 'ribWidth', 'refraction', 'ribMagnify', 'ribShadow'].forEach(function (ik) { keep[ik] = state.desktop[ik]; });
+      keep.imageMode = state.desktop.imageMode;
+      keep.customGLSL = state.desktop.customGLSL;
+      if (state.desktop.lightMap || state.desktop.image) ['fit', 'zoom', 'focusX', 'focusY', 'ribWidth', 'refraction', 'ribMagnify', 'ribShadow'].forEach(function (ik) { keep[ik] = state.desktop[ik]; });
       var reset = {};
       for (var k in state.desktop) if (!(k in keep)) reset[k] = null;
       state.desktop = {};
@@ -905,6 +936,7 @@ html, body { margin: 0; }
   }
   document.getElementById('reset').addEventListener('click', function () {
     clearImageUi();
+    glslBox.value = '';
     state = { desktop: {}, tablet: {}, mobile: {} };
     presetMark = { desktop: 'default', tablet: 'default', mobile: 'default' };
     if (fx) { fx.destroy(); fx = FlutedHero.create(stage, {}); }
@@ -1049,6 +1081,8 @@ html, body { margin: 0; }
     if (k === 'image') return typeof v === 'string' && v.length <= 30000 && /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+={0,2}$/.test(v) ? v : undefined;
     if (k === 'lightMap') return typeof v === 'string' && v.length <= 8000 && /^\d{1,3}x\d{1,3}:[A-Za-z0-9+\/]+={0,2}$/.test(v) ? v : undefined;
     if (k === 'fit') return v === 'cover' || v === 'stretch' ? v : undefined;
+    if (k === 'imageMode') return v === 'exact' || v === 'glass' ? v : undefined;
+    if (k === 'customGLSL') return typeof v === 'string' && v.length <= 6000 ? v : undefined;
     if (typeof D[k] === 'number') return typeof v === 'number' && isFinite(v) ? v : undefined;
     if (typeof D[k] === 'boolean') return typeof v === 'boolean' ? v : undefined;
     return undefined;
@@ -1082,6 +1116,7 @@ html, body { margin: 0; }
     }
     if (fx) fx.destroy();
     fx = FlutedHero.create(stage, JSON.parse(JSON.stringify(cfg)));
+    glslBox.value = cfg.customGLSL || '';
     if (cfg.colors) {
       basePalette = cfg.colors.slice(); hue = 0;
       var idx = -1;
@@ -1107,21 +1142,49 @@ html, body { margin: 0; }
   var imageFile = document.getElementById('image-file'), imagePick = document.getElementById('image-pick');
   var imageResult = document.getElementById('image-result'), imageThumb = document.getElementById('image-thumb');
   var imageStatus = document.getElementById('image-status'), imageRemove = document.getElementById('image-remove');
-  var imageUrl = null, beforeImage = null;
+  var imageUrl = null, beforeImage = null, lastAnalysis = null;
+  var imageModeRow = document.getElementById('image-mode-row');
+  var imageModeBtns = document.querySelectorAll('[data-image-mode]');
   var DETECTED = { lines: 'straight ribs', wave: 'wavy ribs', zigzag: 'zigzag ribs', rings: 'rings', rays: 'rays', grid: 'a grid' };
   function clearImageUi() {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
-    imageUrl = null; beforeImage = null; linkImage = '';
+    imageUrl = null; beforeImage = null; linkImage = ''; lastAnalysis = null;
     imageThumb.removeAttribute('src');
     imageResult.hidden = true; imageRemove.hidden = true;
     imagePick.textContent = 'Add an image';
     imageFile.value = '';
   }
-  function applyAnalysis(r) {
-    if (!beforeImage) beforeImage = JSON.parse(JSON.stringify(optionsObject('raw')));
+  function syncImageMode() {
+    if (!imageModeRow) return;   // sync() can run before this section has set up
+    var has = !!state.desktop.image, mode = eff('imageMode');
+    imageModeRow.hidden = !has;
+    imageModeBtns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-image-mode') === mode)); });
+    document.getElementById('out-image-mode').textContent = mode === 'exact' ? 'pixel for pixel' : 'seen through ribs';
+    if (!has || !lastAnalysis) return;
+    imageStatus.textContent = mode === 'exact'
+      ? 'Your image is shown exactly as designed. Move the cursor over it to see it bend.'
+      : lastAnalysis.detected
+        ? 'Your image is behind the glass, with ribs laid out as ' + DETECTED[lastAnalysis.detected] + '.'
+        : 'Your image is behind the glass, with straight ribs. Pick another layout in Pattern.';
+  }
+  // Exact: the picture itself fills the hero like object-fit: cover. Nothing is drawn over it, the rib
+  // settings are unused, and the only motion is the cursor bending it (idle sway starts off).
+  function exactPatch(r) {
+    return { image: r.image, imageMode: 'exact', fit: 'stretch', zoom: 1, focusX: 0.5, focusY: 0.5,
+      lightDrag: 1, waveAmpX: 0, waveAmpY: 0, cursorGlow: 0 };
+  }
+  function glassPatch(r) {
     // Gentler glass than the default, so the design stays recognizable through the ribs.
-    var patch = { image: r.image, lightMap: r.lightMap, fit: 'cover', zoom: 1, focusX: 0.5, focusY: 0.5, refraction: 0.02, ribMagnify: 0.8, ribShadow: 0.24 };
+    var patch = { image: r.glassImage, imageMode: 'glass', lightMap: r.lightMap, fit: 'cover', zoom: 1, focusX: 0.5, focusY: 0.5,
+      refraction: 0.02, ribMagnify: 0.8, ribShadow: 0.24, lightDrag: D.lightDrag, waveAmpX: D.waveAmpX, waveAmpY: D.waveAmpY, cursorGlow: D.cursorGlow };
     for (var k in r.settings) patch[k] = r.settings[k];
+    return patch;
+  }
+  function applyAnalysis(r, mode) {
+    if (!beforeImage) beforeImage = JSON.parse(JSON.stringify(optionsObject('raw')));
+    lastAnalysis = r;
+    var patch = mode === 'glass' ? glassPatch(r) : exactPatch(r);
+    if (mode !== 'glass') { delete state.desktop.lightMap; if (fx) fx.set({ lightMap: null }); }
     // The built-in tablet and mobile framing is tuned for the diagonal light, so image framing replaces it.
     var frame = { zoom: 1, focusX: 0.5, focusY: 0.5 };
     state.tablet = JSON.parse(JSON.stringify(frame));
@@ -1148,24 +1211,75 @@ html, body { margin: 0; }
       var r;
       try {
         r = FlutedAnalyzer.fromImage(img);
-        r.image = FlutedAnalyzer.exportImage(img, 1600, 0.86);
+        r.image = FlutedAnalyzer.exportFull(img, 2560, 0.93);           // exact: whole image, full detail
+        r.glassImage = FlutedAnalyzer.exportImage(img, 1600, 0.86);     // behind glass: 16:9 crop
         linkImage = FlutedAnalyzer.exportImage(img, 240, 0.6, 16000);
       }
       catch (e) { URL.revokeObjectURL(url); say('Could not read that image'); return; }
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       imageUrl = url;
       imageThumb.src = url;
-      applyAnalysis(r);
       imageResult.hidden = false; imageRemove.hidden = false;
       imagePick.textContent = 'Use a different image';
-      imageStatus.textContent = r.detected
-        ? 'Your image is behind the glass, with ribs laid out as ' + DETECTED[r.detected] + '.'
-        : 'Your image is behind the glass, with straight ribs. Pick another layout in Pattern.';
+      applyAnalysis(r, state.desktop.imageMode === 'glass' ? 'glass' : 'exact');
       layoutStage();
     };
     img.onerror = function () { URL.revokeObjectURL(url); say('Could not read that image'); };
     img.src = url;
   });
+  imageModeBtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var mode = b.getAttribute('data-image-mode');
+      if (lastAnalysis) applyAnalysis(lastAnalysis, mode);
+      else { setOpt({ imageMode: mode }); sync(); }   // e.g. loaded from a share link: only the mode switches
+      layoutStage();
+    });
+  });
+
+  // ---------- custom animation ----------
+  var glslBox = document.getElementById('custom-glsl');
+  var ANIM_EXAMPLES = [
+    { name: 'Ripple', code:
+      '// rings spread out from the cursor while it is over the hero\n' +
+      'vec2 fhWarp(vec2 uv, float t, vec2 m, float h) {\n' +
+      '  vec2 d = uv - m;\n' +
+      '  float r = length(d * vec2(1.78, 1.0));\n' +
+      '  float w = sin(r * 60.0 - t * 6.0) * exp(-r * 6.0) * 0.006 * h;\n' +
+      '  return uv + normalize(d + 1e-5) * w;\n' +
+      '}' },
+    { name: 'Drift', code:
+      '// slow horizontal drift that breathes in and out\n' +
+      'vec2 fhWarp(vec2 uv, float t, vec2 m, float h) {\n' +
+      '  return uv + vec2(0.004 * sin(t * 0.6 + uv.y * 3.0), 0.0);\n' +
+      '}' },
+    { name: 'Shimmer', code:
+      '// a soft light band sweeping across the design\n' +
+      'vec3 fhColor(vec3 c, vec2 uv, float t, vec2 m, float h) {\n' +
+      '  float band = exp(-pow((uv.x + uv.y * 0.4 - fract(t * 0.12) * 2.0 + 0.3) * 8.0, 2.0));\n' +
+      '  return c + band * 0.12;\n' +
+      '}' }
+  ];
+  var exWrap = document.getElementById('anim-examples');
+  ANIM_EXAMPLES.forEach(function (ex) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = ex.name;
+    b.addEventListener('click', function () { glslBox.value = ex.code; applyGlsl(); });
+    exWrap.appendChild(b);
+  });
+  function applyGlsl() {
+    // Custom code applies to every screen, so it always lives on the desktop settings.
+    var code = glslBox.value.trim();
+    if (code) state.desktop.customGLSL = code; else delete state.desktop.customGLSL;
+    if (fx) fx.set({ customGLSL: code || null });
+    sync();
+    say(code ? 'Custom animation applied' : 'Custom animation removed');
+  }
+  document.getElementById('glsl-apply').addEventListener('click', applyGlsl);
+  document.getElementById('glsl-clear').addEventListener('click', function () { glslBox.value = ''; applyGlsl(); });
+  glslBox.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); applyGlsl(); }
+  });
+
   imageRemove.addEventListener('click', function () {
     var cfg = beforeImage || {};
     clearImageUi();

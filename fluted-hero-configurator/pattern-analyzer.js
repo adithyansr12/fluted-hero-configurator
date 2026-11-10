@@ -500,5 +500,19 @@
     }
   }
 
-  global.FlutedAnalyzer = { analyze: analyze, fromImage: fromImage, exportImage: exportImage };
+  // The whole image, uncropped, at up to maxSide px on its long side (never upscaled). Used by exact mode,
+  // where the hero shows the picture itself, so it keeps as much detail as possible.
+  function exportFull(img, maxSide, quality) {
+    var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    var k = Math.min(1, maxSide / Math.max(iw, ih));
+    var c = document.createElement('canvas'), ctx = c.getContext('2d');
+    c.width = Math.max(1, Math.round(iw * k)); c.height = Math.max(1, Math.round(ih * k));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', quality);
+  }
+
+  global.FlutedAnalyzer = { analyze: analyze, fromImage: fromImage, exportImage: exportImage, exportFull: exportFull };
 })(typeof window !== 'undefined' ? window : this);

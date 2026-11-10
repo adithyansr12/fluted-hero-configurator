@@ -7,8 +7,8 @@ A public page where anyone can tune the interactive fluted-glass hero background
 | File | What it is |
 | --- | --- |
 | `index.html` | The configurator page |
-| `fluted-hero.js` | The effect script, readable source (v1.3.0) |
-| `fluted-hero.min.js` | The same script, minified (26 KB, about 11 KB gzipped) |
+| `fluted-hero.js` | The effect script, readable source (v1.4.0) |
+| `fluted-hero.min.js` | The same script, minified (29 KB, about 12 KB gzipped) |
 | `pattern-analyzer.js` | Reads an uploaded image for the configurator; your own site does not need it |
 | `README.md` | This guide |
 
@@ -36,7 +36,8 @@ Opening `index.html` straight from your disk (`file://`) shows the effect, but t
 
 - **Desktop / Tablet / Mobile** at the top of the settings panel picks which screen you are editing. Tablet settings override Desktop; Mobile settings override both. A dot marks every setting changed for that screen.
 - **Breakpoints** default to a hero up to 1024 px wide for Tablet and up to 640 px for Mobile, and can be changed in the panel.
-- **Match an image** puts your picture behind the glass in full color and matches the rib layout and spacing to it. Share links carry a smaller copy of the picture; the generated code points to the file you upload (Download image). Remove image and undo restores your earlier settings. Images are center-cropped to 16:9.
+- **Match an image** has two modes. **Exact design** (the default) shows your picture pixel for pixel, filling the hero like `object-fit: cover`; no ribs, shading or color changes are added, and the only motion is the cursor bending it (turn on Idle sway in Cursor & motion if you want it). **Behind glass** puts the picture behind the procedural ribs and matches the rib layout and spacing to it. Share links carry a smaller copy of the picture, so they look softer than the real thing; the generated code points to the file you upload (Download image). Remove image and undo restores your earlier settings.
+- **Custom animation** takes your own GLSL (see below). Ripple, Drift and Shimmer are examples to start from.
 - **Pattern** picks the rib layout, shapes it with sliders, and sets a repeating rib-width rhythm. **Save this pattern** keeps it in your browser for later; share links and the generated code include the current pattern.
 - **Colors** apply to every screen.
 - **Share link** copies a URL with the settings inside it (after `#s=`). Whoever opens it sees the same settings. Nothing is stored on the server.
@@ -85,6 +86,8 @@ For React, Next.js or Vite, copy the component from the configurator page. It lo
 | `patternCenterX`, `patternCenterY` | `0.5`, `0.5` | Center of rings or rays (0 = left/top, 1 = right/bottom) |
 | `ribRhythm` | `[1]` | Repeating rib widths as multiples of `ribWidth`, up to 8 values from 0.25 to 6, e.g. `[1, 1, 3]` |
 | `image` | `''` | Picture shown behind the glass in full color: a same-origin or CORS-enabled URL, or a data URI |
+| `imageMode` | `'glass'` | `'exact'` shows `image` as it is, moved only by the cursor push and idle sway; `'glass'` shows it through the ribs |
+| `customGLSL` | `''` | Your own animation as GLSL (see Custom animation) |
 | `lightMap` | `''` | Light behind the glass as `"WxH:base64"` brightness bytes; empty uses the built-in diagonal light. Match an image fills this in |
 | `fit` | `'stretch'` | `'stretch'` squeezes the whole 16:9 design into the hero; `'cover'` crops it to fill |
 | `zoom`, `focusX`, `focusY` | `1`, `0.5`, `0.5` | Zoom and which part stays in view (0 = left/top, 1 = right/bottom) |
@@ -97,6 +100,40 @@ For React, Next.js or Vite, copy the component from the configurator page. It lo
 | `tension`, `friction` | `0.01`, `0.9` | Spring feel: pull back to rest, and damping |
 | `tabletMax`, `mobileMax` | `1024`, `640` | Hero widths where Tablet and Mobile settings start |
 | `tablet`, `mobile` | crop-to-fill framing | Overrides for those screens (any setting above) |
+
+## Custom animation
+
+`customGLSL` is GLSL that defines one or both of these functions. Leave one out and it does nothing.
+
+```glsl
+// Where to sample the image. Runs in both image modes.
+vec2 fhWarp(vec2 uv, float t, vec2 m, float h) { return uv; }
+// The final color of every pixel.
+vec3 fhColor(vec3 c, vec2 uv, float t, vec2 m, float h) { return c; }
+```
+
+- `uv`: position in the design, 0..1 from the top-left
+- `t`: seconds (scaled by `lightSpeed`)
+- `m`: cursor position in the same uv space
+- `h`: 0..1, eases to 1 while the cursor is over the hero
+- `imageAt(uv)` returns your image's color at a uv, e.g. for chromatic aberration
+
+Example, rings spreading out from the cursor:
+
+```js
+FlutedHero.create(hero, {
+  image: '/media/design.jpg',
+  imageMode: 'exact',
+  customGLSL: `
+    vec2 fhWarp(vec2 uv, float t, vec2 m, float h) {
+      vec2 d = uv - m;
+      float r = length(d * vec2(1.78, 1.0));
+      return uv + normalize(d + 1e-5) * sin(r * 60.0 - t * 6.0) * exp(-r * 6.0) * 0.006 * h;
+    }`
+});
+```
+
+If the code does not compile, the effect runs without it and the browser console shows the compiler error. `fx.set({ customGLSL: '...' })` swaps it live.
 
 ## Browser support
 

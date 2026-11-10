@@ -1,5 +1,5 @@
 /*!
- * Fluted Hero v1.3.0 —interactive fluted-glass background (WebGL, no dependencies)
+ * Fluted Hero v1.4.0 —interactive fluted-glass background (WebGL, no dependencies)
  *
  * Pattern: vertical glass ribs refracting a blue light field (matches the Figma/video design).
  * Interaction: Perlin-noise idle sway + cursor-velocity spring push on every rib,
@@ -53,6 +53,9 @@
     patternCenterY: 0.5,     // (0 = top, 1 = bottom)
     ribRhythm: [1],          // repeating rib widths as multiples of ribWidth, up to 8, e.g. [1, 1, 3]
     image: '',               // picture shown behind the glass in full color: a URL (same origin or CORS-enabled) or data URI
+    imageMode: 'glass',      // 'glass' = image seen through the procedural ribs; 'exact' = the image itself, pixel for pixel,
+                             //   moved only by the cursor / idle-sway displacement (no ribs, shading or color changes added)
+    customGLSL: '',          // your own animation: GLSL that defines fhWarp() and/or fhColor() (see README, "Custom animation")
     lightMap: '',            // optional light behind the glass: "WxH:base64" brightness bytes ('' = built-in diagonal light)
 
     // ---- Framing: how the 16:9 design maps onto the hero ----
@@ -123,7 +126,20 @@
   /* ------------------------------------------------------------------ */
   var VERT = 'attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.0,1.0);}';
 
-  var FRAG = [
+  // Animation hooks. uv is the position in the design frame (0..1, top-left origin), t is time in seconds,
+  // m is the cursor in the same uv space, h is 0..1 while the cursor is over the hero.
+  // fhWarp returns where to sample the image; fhColor returns the final color.
+  var HOOK_WARP = 'vec2 fhWarp(vec2 uv,float t,vec2 m,float h){return uv;}';
+  var HOOK_COLOR = 'vec3 fhColor(vec3 c,vec2 uv,float t,vec2 m,float h){return c;}';
+  function hooks(custom) {
+    custom = custom || '';
+    var out = custom + '\n';
+    if (!/\bfhWarp\s*\(/.test(custom)) out += HOOK_WARP + '\n';
+    if (!/\bfhColor\s*\(/.test(custom)) out += HOOK_COLOR + '\n';
+    return out;
+  }
+
+  var FRAG_HEAD = [
     'precision highp float;',
     'uniform vec2 uSize;uniform float uDpr;uniform float uTime;',
     'uniform sampler2D uDisp;uniform vec2 uGridOrigin;uniform vec2 uGridGap;uniform vec2 uGridSize;',
@@ -136,7 +152,13 @@
     'uniform float uRhy[8];uniform float uRhyN;uniform float uRhyT;',
     'uniform sampler2D uLight;uniform float uLightOn;',
     'uniform sampler2D uImg;uniform float uImgOn;uniform vec2 uImgScale;',
+    'uniform float uExact;uniform float uHover;',
+    // available to your hooks too
+    'vec2 frameUv(vec2 s){return (s-uFrame.xy)/uFrame.zw;}',
+    'vec3 imageAt(vec2 uv){return texture2D(uImg,(uv-0.5)*uImgScale+0.5).rgb;}'
+  ].join('\n');
 
+  var FRAG_BODY = [
     'vec2 disp(vec2 p){',
     '  vec2 uv=((p-uGridOrigin)/uGridGap+0.5)/uGridSize;',
     '  vec4 t=texture2D(uDisp,uv);',
@@ -246,9 +268,10 @@
     '  float I;vec3 c;',
     '  if(uImgOn>0.5){',
     // the picture itself, in full color, seen through the glass
-    '    vec2 iu=(s-uFrame.xy)/uFrame.zw;',
+    '    vec2 iu=frameUv(s);',
     '    iu+=vec2(0.003*sin(iu.y*5.0+uTime*0.21),0.003*sin(iu.x*4.0-uTime*0.17));',
-    '    c=texture2D(uImg,(iu-0.5)*uImgScale+0.5).rgb;',
+    '    iu=fhWarp(iu,uTime,frameUv(uMouse.xy),uHover);',
+    '    c=imageAt(iu);',
     '    I=dot(c,vec3(0.2126,0.7152,0.0722));',
     '    vec2 im=(s-uMouse.xy)/(0.26*min(uSize.x,uSize.y));',
     '    c+=uMouse.z*exp(-dot(im,im));',
@@ -267,6 +290,17 @@
 
     'void main(){',
     '  vec2 p=vec2(gl_FragCoord.x,uSize.y*uDpr-gl_FragCoord.y)/uDpr;',
+    // exact: the image as it is; only the displacement field (cursor push, idle sway) and your hooks move it
+    '  if(uExact>0.5){',
+    '    vec2 s=p-disp(p)*uDrag;',
+    '    vec2 uv=frameUv(s),m=frameUv(uMouse.xy);',
+    '    uv=fhWarp(uv,uTime,m,uHover);',
+    '    vec3 ec=uImgOn>0.5?imageAt(uv):uC0;',
+    '    vec2 em=(s-uMouse.xy)/(0.26*min(uSize.x,uSize.y));',
+    '    ec+=uMouse.z*exp(-dot(em,em));',
+    '    gl_FragColor=vec4(fhColor(ec,uv,uTime,m,uHover),1.0);',
+    '    return;',
+    '  }',
     '  vec4 o,o2;vec2 n,n2;',
     '  vec3 col=shade(p,o,n);',
     // antialias only the rib seams: one extra sample on the other side of the seam
@@ -280,9 +314,11 @@
     '    else if(gr<px*0.75){col=mix(shade(p+t*px,o2,n2),col,0.5+0.5*gr/(px*0.75));}',
     '  }',
     '  col+=(hash(gl_FragCoord.xy+fract(uTime))-0.5)/255.0;',
-    '  gl_FragColor=vec4(col,1.0);',
+    '  gl_FragColor=vec4(fhColor(col,frameUv(p),uTime,frameUv(uMouse.xy),uHover),1.0);',
     '}'
   ].join('\n');
+
+  function fragSource(custom) { return FRAG_HEAD + '\n' + hooks(custom) + FRAG_BODY; }
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                              */
@@ -354,7 +390,7 @@
     canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:0;';
     container.insertBefore(canvas, container.firstChild);
 
-    var gl = null, isGL2 = false, prog = null, buf = null, tex = null, U = {};
+    var gl = null, isGL2 = false, prog = null, progKey = null, buf = null, tex = null, U = {};
     var lightTex = null, lightKey = null, lightOn = false;
     var imgTex = null, imgKey = null, imgReady = null;
     var metrics = { ribPx: 0, frame: [0, 0, 0, 0] };
@@ -371,24 +407,14 @@
       if (!gl) gl = canvas.getContext('webgl', attrs) || canvas.getContext('experimental-webgl', attrs);
       if (!gl) return false;
 
-      prog = gl.createProgram();
-      gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
-      gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
-      gl.bindAttribLocation(prog, 0, 'aPos');
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error('FlutedHero link: ' + gl.getProgramInfoLog(prog));
-      gl.useProgram(prog);
-
       buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-      ['uSize', 'uDpr', 'uTime', 'uDisp', 'uGridOrigin', 'uGridGap', 'uGridSize', 'uEnc', 'uRange',
-        'uRib', 'uRefr', 'uCurve', 'uMag', 'uHl', 'uShadow', 'uDrag', 'uMouse', 'uFrame',
-        'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5',
-        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT', 'uLight', 'uLightOn', 'uImg', 'uImgOn', 'uImgScale'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+      prog = null; progKey = null;
+      ensureProgram();
 
       tex = gl.createTexture();
       gl.activeTexture(gl.TEXTURE0);
@@ -398,7 +424,6 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      gl.uniform1i(U.uDisp, 0);
 
       lightTex = gl.createTexture();
       lightKey = null;
@@ -419,9 +444,47 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array(3));
       gl.activeTexture(gl.TEXTURE0);
-      gl.uniform1i(U.uImg, 2);
-      gl.uniform1i(U.uLight, 1);
       applyStaticUniforms();
+      return true;
+    }
+
+    // (Re)builds the shader when customGLSL changes. Bad custom code logs a warning and falls back to no hooks.
+    function linkProgram(custom) {
+      var p = gl.createProgram(), vs = compile(gl, gl.VERTEX_SHADER, VERT), fs;
+      try { fs = compile(gl, gl.FRAGMENT_SHADER, fragSource(custom)); } catch (e) { gl.deleteShader(vs); gl.deleteProgram(p); throw e; }
+      gl.attachShader(p, vs); gl.attachShader(p, fs);
+      gl.bindAttribLocation(p, 0, 'aPos');
+      gl.linkProgram(p);
+      gl.deleteShader(vs); gl.deleteShader(fs);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+        var log = gl.getProgramInfoLog(p);
+        gl.deleteProgram(p);
+        throw new Error('FlutedHero link: ' + log);
+      }
+      return p;
+    }
+    function ensureProgram() {
+      var key = typeof cfg.customGLSL === 'string' ? cfg.customGLSL : '';
+      if (prog && key === progKey) return false;
+      var next;
+      try { next = linkProgram(key); }
+      catch (e) {
+        if (!key) throw e;
+        console.warn('FlutedHero: customGLSL did not compile, running without it.\n' + e.message);
+        next = linkProgram('');
+      }
+      if (prog) gl.deleteProgram(prog);
+      prog = next; progKey = key;
+      gl.useProgram(prog);
+      U = {};
+      ['uSize', 'uDpr', 'uTime', 'uDisp', 'uGridOrigin', 'uGridGap', 'uGridSize', 'uEnc', 'uRange',
+        'uRib', 'uRefr', 'uCurve', 'uMag', 'uHl', 'uShadow', 'uDrag', 'uMouse', 'uFrame',
+        'uC0', 'uC1', 'uC2', 'uC3', 'uC4', 'uC5',
+        'uType', 'uDir', 'uCenter', 'uBend', 'uWaves', 'uRayN', 'uRhy', 'uRhyN', 'uRhyT', 'uLight', 'uLightOn',
+        'uImg', 'uImgOn', 'uImgScale', 'uExact', 'uHover'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+      gl.uniform1i(U.uDisp, 0);
+      gl.uniform1i(U.uLight, 1);
+      gl.uniform1i(U.uImg, 2);
       return true;
     }
 
@@ -488,6 +551,7 @@
       // image: drawn behind the glass once loaded; the light above shows until then, or if it fails
       if ((cfg.image || '') !== imgKey) loadImage(cfg.image || '');
       gl.uniform1f(U.uImgOn, imgReady ? 1 : 0);
+      gl.uniform1f(U.uExact, cfg.imageMode === 'exact' ? 1 : 0);
       if (imgReady) {
         var fa = fw / fh, ia = imgReady.width / imgReady.height;
         gl.uniform2f(U.uImgScale, ia > fa ? fa / ia : 1, ia > fa ? 1 : ia / fa);
@@ -501,13 +565,28 @@
       if (!/^data:/.test(src)) img.crossOrigin = 'anonymous';
       img.onload = function () {
         if (destroyed || imgKey !== src || !gl) return;
+        var iw = img.naturalWidth, ih = img.naturalHeight, srcEl = img;
         try {
+          // larger than the GPU allows: scale down first
+          var maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
+          if (iw > maxTex || ih > maxTex) {
+            var k = maxTex / Math.max(iw, ih), cv = document.createElement('canvas');
+            cv.width = Math.floor(iw * k); cv.height = Math.floor(ih * k);
+            cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+            srcEl = cv; iw = cv.width; ih = cv.height;
+          }
           gl.activeTexture(gl.TEXTURE2);
           gl.bindTexture(gl.TEXTURE_2D, imgTex);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, srcEl);
+          // Mipmaps keep fine lines in the picture from shimmering when it is shown smaller than its pixel size.
+          var pot = !(iw & (iw - 1)) && !(ih & (ih - 1));
+          if (isGL2 || pot) {
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          } else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
           gl.activeTexture(gl.TEXTURE0);
         } catch (e) { console.warn('FlutedHero: could not use image', e); gl.activeTexture(gl.TEXTURE0); return; }
-        imgReady = { width: img.naturalWidth, height: img.naturalHeight };
+        imgReady = { width: iw, height: ih };
         applyStaticUniforms();
         if (!running) render(performance.now(), true);
       };
@@ -546,8 +625,9 @@
       var prevKey = gridKey(cfg);
       W = nw; H = nh;
       cfg = computeCfg();
+      var progChanged = ensureProgram();   // a new program starts with no uniforms set
       var nd = Math.min(global.devicePixelRatio || 1, cfg.maxDpr) * quality;
-      if (sizeChanged || nd !== dpr) {
+      if (sizeChanged || nd !== dpr || progChanged) {
         dpr = nd;
         canvas.width = Math.round(W * dpr);
         canvas.height = Math.round(H * dpr);
@@ -556,7 +636,7 @@
         gl.uniform1f(U.uDpr, canvas.width / W);
       }
       applyStaticUniforms();
-      if (sizeChanged || gridKey(cfg) !== prevKey) buildGrid();
+      if (sizeChanged || progChanged || gridKey(cfg) !== prevKey) buildGrid();
       if (!running) render(performance.now(), true);
     }
 
@@ -636,6 +716,7 @@
       if (steps) upload();
       gl.uniform1f(U.uTime, lightClock);
       gl.uniform3f(U.uMouse, mouse.sx, mouse.sy, cfg.cursorGlow * mouse.glow);
+      gl.uniform1f(U.uHover, mouse.glow);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
@@ -768,7 +849,7 @@
     }
   }
 
-  var api = { version: '1.3.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
+  var api = { version: '1.4.0', create: create, defaults: DEFAULTS, patterns: PATTERNS.slice() };
   global.FlutedHero = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 
